@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@layer base {
+  /* Reset is handled by Tailwind's preflight */
+  html,
+  body {
+    height: 100%;
+    width: 100%;
+  }
+}
+
+@layer utilities {
+  .message-box {
+    scroll-behavior: smooth;
+    -ms-overflow-style: none;  /* IE/Edge */
+    scrollbar-width: none;    /* Firefox */
+  }
+  
+  .message-box::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Opera */
+  }
+}
