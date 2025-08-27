@@ -352,28 +352,55 @@ const Project = () => {
                         </div>
 
                         <div className="actions">
+                            {/* Inside the 'actions' div in your Project.jsx return statement */}
                             <button
                                 onClick={async () => {
-                                    if (!webContainer) return;
+                                    if (!webContainer) {
+                                        console.error("WebContainer not ready.");
+                                        return;
+                                    }
+                                    console.log("▶️ Run button clicked. Mounting files...");
                                     await webContainer.mount(fileTree);
 
                                     // Find the last AI message with buildCommand and startCommand
                                     const aiMsg = messages
-                                        .filter(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))
-                                        .map(msg => msg.message)
-                                        .pop();
+                                        .slice() // Create a copy to avoid mutating state
+                                        .reverse() // Start from the newest message
+                                        .find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))
+                                        ?.message;
 
-                                    // Run build command (npm install) if present
-                                    if (aiMsg?.buildCommand) {
-                                        const buildArr = parseCommand(aiMsg.buildCommand);
-                                        if (buildArr) {
-                                            const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
-                                            await buildProc.exit; // Wait for install to finish
-                                        }
+                                    if (!aiMsg) {
+                                        console.warn("No AI message with build/start commands found. Assuming defaults.");
                                     }
 
-                                    // Kill previous server if running
+                                    // --- 1. RUN BUILD COMMAND (npm install) ---
+                                    const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
+                                    const buildArr = parseCommand(buildCommand);
+
+                                    if (buildArr) {
+                                        console.log(`Starting build command: ${buildArr.join(' ')}`);
+                                        const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
+
+                                        // Pipe output to console to see progress/errors
+                                        buildProc.output.pipeTo(new WritableStream({
+                                            write(chunk) {
+                                                console.log(`[npm install]: ${chunk}`);
+                                            }
+                                        }));
+
+                                        const exitCode = await buildProc.exit;
+                                        if (exitCode !== 0) {
+                                            console.error(`❌ Build process failed with exit code ${exitCode}.`);
+                                            // Optionally, show an error to the user here
+                                            return; // Stop execution if build fails
+                                        }
+                                        console.log("✅ Build finished successfully.");
+                                    }
+
+
+                                    // --- 2. KILL PREVIOUS SERVER (if any) ---
                                     if (serverProc) {
+                                        console.log("Killing previous server process...");
                                         try {
                                             await serverProc.kill();
                                         } catch (e) {
@@ -381,22 +408,29 @@ const Project = () => {
                                         }
                                     }
 
-                                    // Run start command
-                                    let startArr = parseCommand(aiMsg?.startCommand);
-                                    if (!startArr) startArr = ['npm', 'start'];
-                                    const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
-                                    setServerProc(startProc); // Save reference to kill next time
+                                    // --- 3. RUN START COMMAND (npm start) ---
+                                    const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
+                                    const startArr = parseCommand(startCommand);
 
-                                    startProc.output.pipeTo(new WritableStream({
-                                        write(chunk) {
-                                            console.log(chunk);
-                                        }
-                                    }));
+                                    if (startArr) {
+                                        console.log(`Starting server command: ${startArr.join(' ')}`);
+                                        const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
+                                        setServerProc(startProc); // Save reference to kill next time
 
-                                    webContainer.on('server-ready', (port, url) => {
-                                        console.log(url)
-                                        setIframeUrl(url)
-                                    })
+                                        startProc.output.pipeTo(new WritableStream({
+                                            write(chunk) {
+                                                console.log(`[server output]: ${chunk}`);
+                                            }
+                                        }));
+
+                                        webContainer.on('server-ready', (port, url) => {
+                                            console.log(`✅ Server is ready at: ${url}`);
+                                            setIframeUrl(url);
+                                        });
+                                        webContainer.on('error', (error) => {
+                                            console.error('❌ WebContainer error:', error);
+                                        });
+                                    }
                                 }}
                                 className='p-2 px-4 bg-blue-500 text-white'>
                                 Run
