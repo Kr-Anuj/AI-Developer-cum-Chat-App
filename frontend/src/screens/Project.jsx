@@ -78,6 +78,9 @@ const Project = () => {
     const [iframeUrl, setIframeUrl] = useState(null)
 
     const [serverProc, setServerProc] = useState(null);
+    
+    const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+    const [selectedMessages, setSelectedMessages] = useState(new Set());
 
     const handleUserSelect = (id) => {
         setSelectedUserId(prev => {
@@ -106,6 +109,39 @@ const Project = () => {
         appendOutgoingMessage({ text: message })
         setMessage('')
     }
+
+    const handleMessageSelection = (messageIndex, isChecked) => {
+    setSelectedMessages(prev => {
+        const newSet = new Set(prev);
+        if (isChecked) {
+            newSet.add(messageIndex);
+        } else {
+            newSet.delete(messageIndex);
+        }
+        return newSet;
+    });
+};
+
+    // Handles the final save action
+    const handleSaveProject = async () => {
+        // Filter the main messages array based on the indices in our Set
+        const messagesToSave = messages.filter((_, index) => selectedMessages.has(index));
+    
+        const payload = {
+            fileTree: fileTree,
+            selectedMessages: messagesToSave
+        };
+    
+        try {
+            // Use the new PATCH route and endpoint
+            const response = await axios.patch(`/projects/${project._id}/save`, payload);
+            alert("Project saved successfully!");
+            setIsSaveModalOpen(false); // Close the modal on success
+        } catch (error) {
+            console.error("Failed to save project:", error);
+            alert("Error saving project. Please try again.");
+        }
+    };
 
     function writeAiMessage(message) {
         const messageObject = typeof message === "string" ? JSON.parse(message) : message
@@ -171,9 +207,19 @@ const Project = () => {
         })
 
         axios.get(`/projects/get-project/${location.state.project._id}`).then(res => {
-            setProject(res.data.project)
-            setFileTree(res.data.project.fileTree)
+            const loadedProject = res.data.project;
+            setProject(loadedProject);
+            // If a fileTree exists in the DB and is not empty, load it.
+            if (loadedProject.fileTree && Object.keys(loadedProject.fileTree).length > 0) {
+                setFileTree(loadedProject.fileTree);
+            }
+
+            // If saved messages exist in the DB, load them.
+            if (loadedProject.messages && loadedProject.messages.length > 0) {
+                setMessages(loadedProject.messages);
+            }
         })
+        
         axios.get('/users/all').then(res => {
             setUsers(res.data.users)
         }).catch(err => {
@@ -218,6 +264,44 @@ const Project = () => {
     useEffect(() => {
         scrollToBottom()
     }, [messages])
+
+    const styles = {
+        modalBackdrop: {
+            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+            justifyContent: 'center', alignItems: 'center', zIndex: 1000,
+        },
+        modalContent: {
+            backgroundColor: 'white', padding: '20px', borderRadius: '8px',
+            width: '90%', maxWidth: '600px', maxHeight: '80vh',
+            display: 'flex', flexDirection: 'column',
+        },
+        modalHeader: {
+            margin: 0, marginBottom: '15px'
+        },
+        messagesList: {
+            overflowY: 'auto', border: '1px solid #ccc',
+            padding: '10px', flexGrow: 1,
+        },
+        messageItem: {
+            display: 'flex', alignItems: 'center', marginBottom: '8px',
+        },
+        messageLabel: {
+            marginLeft: '10px',
+        },
+        modalActions: {
+            marginTop: '20px', display: 'flex', justifyContent: 'flex-end',
+        },
+        buttonPrimary: {
+            padding: '10px 20px', border: 'none', borderRadius: '5px',
+            backgroundColor: '#28a745', color: 'white', cursor: 'pointer',
+        },
+        buttonSecondary: {
+            padding: '10px 20px', border: 'none', borderRadius: '5px',
+            backgroundColor: '#6c757d', color: 'white', cursor: 'pointer',
+            marginLeft: '10px',
+        }
+    };
 
     return (
         <main className='h-screen w-screen flex'>
@@ -353,6 +437,11 @@ const Project = () => {
 
                         <div className="actions">
                             {/* Inside the 'actions' div in your Project.jsx return statement */}
+                            <button
+                                onClick={() => setIsSaveModalOpen(true)}
+                                className='p-2 px-4 bg-green-600 text-white'>
+                                Save Project
+                            </button>
                             <button
                                 onClick={async () => {
                                     if (!webContainer) {
@@ -526,6 +615,33 @@ const Project = () => {
                                 className='bg-slate-950 text-white px-4 py-2 rounded-lg mt-4'>
                                 Add Selected
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {isSaveModalOpen && (
+                <div style={styles.modalBackdrop}>
+                    <div style={styles.modalContent}>
+                        <h2 style={styles.modalHeader}>Select Messages to Save</h2>
+                        <div style={styles.messagesList}>
+                            {messages.map((msg, index) => (
+                                <div key={index} style={styles.messageItem}>
+                                    <input
+                                        type="checkbox"
+                                        id={`msg-${index}`}
+                                        onChange={(e) => handleMessageSelection(index, e.target.checked)}
+                                        // You can pre-select all by default if you want
+                                        // defaultChecked={true} 
+                                    />
+                                    <label htmlFor={`msg-${index}`} style={styles.messageLabel}>
+                                        <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
+                                    </label>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={styles.modalActions}>
+                            <button onClick={handleSaveProject} style={styles.buttonPrimary}>Save Now</button>
+                            <button onClick={() => setIsSaveModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
                         </div>
                     </div>
                 </div>
