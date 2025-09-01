@@ -19,7 +19,12 @@ const projectSchema = new Schema({
     fileTree: {
         type: Schema.Types.Mixed,  // ✅ Now Schema is defined
         default: {}
-    }
+    },
+
+    messages: [{
+        type: Schema.Types.Mixed,
+        default: []
+    }]
 }, { timestamps: true, minimize: false }); // ✅ Recommended to prevent empty object stripping
 
 const Project = mongoose.model('project', projectSchema);
