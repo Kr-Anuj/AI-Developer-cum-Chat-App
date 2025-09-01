@@ -104,3 +104,29 @@ export const updateFileTree = async (req, res) => {
         res.status(400).json({ error: err.message })
     }
 }
+
+export const saveProjectState = async (req, res) => {
+  try {
+    const { projectId } = req.params; // Get ID from the URL parameter
+    const { fileTree, selectedMessages } = req.body; // Get data from the request body
+
+    // Basic validation to ensure there's something to save
+    if (!fileTree && !selectedMessages) {
+      return res.status(400).json({ message: "No data provided to save." });
+    }
+
+    const updatedProject = await projectService.saveProjectState({
+      projectId,
+      fileTree,
+      messages: selectedMessages,
+    });
+
+    res.status(200).json({
+      message: "Project saved successfully!",
+      project: updatedProject,
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: err.message });
+  }
+};
