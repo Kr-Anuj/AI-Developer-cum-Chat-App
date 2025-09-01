@@ -37,5 +37,9 @@ router.put('/update-file-tree',
     projectController.updateFileTree
 )
 
+router.patch('/:projectId/save',
+    authMiddleWare.authUser,
+    projectController.saveProjectState
+)
 
 export default router;
