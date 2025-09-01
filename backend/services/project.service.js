@@ -119,3 +119,37 @@ export const updateFileTree = async ({ projectId, fileTree }) => {
     })
     return project;
 }
+
+export const saveProjectState = async ({ projectId, fileTree, messages }) => {
+  // Validate the projectId to match your existing style
+  if (!projectId || !mongoose.Types.ObjectId.isValid(projectId)) {
+    throw new Error('A valid Project ID is required.');
+  }
+
+  try {
+    const updateData = {};
+
+    // Conditionally build the update object.
+    if (fileTree !== undefined) {
+      updateData.fileTree = fileTree;
+    }
+    if (messages !== undefined) {
+      updateData.messages = messages;
+    }
+
+    const project = await projectModel.findByIdAndUpdate(
+      projectId,
+      { $set: updateData }, // Use $set to update only the provided fields
+      { new: true, runValidators: true } // Options to return the new doc and run validations
+    );
+
+    if (!project) {
+      throw new Error('Project not found.');
+    }
+
+    return project;
+  } catch (error) {
+    // Re-throw the error to be caught by the controller
+    throw new Error(error.message);
+  }
+};
