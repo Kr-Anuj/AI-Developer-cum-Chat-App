@@ -439,7 +439,7 @@ const Project = () => {
                             {/* Inside the 'actions' div in your Project.jsx return statement */}
                             <button
                                 onClick={() => setIsSaveModalOpen(true)}
-                                className='p-2 px-4 bg-green-600 text-white'>
+                                className='p-2 px-4 bg-green-600 text-white mr-2'>
                                 Save Project
                             </button>
                             <button
