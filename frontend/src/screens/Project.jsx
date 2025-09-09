@@ -25,7 +25,6 @@ function parseStartCommand(startCommand) {
     let cmd = startCommand.mainItem;
     let args = Array.isArray(startCommand.commands) ? startCommand.commands : [];
 
-    // If mainItem is a string with spaces (shouldn't be, but just in case)
     if (typeof cmd === 'string' && cmd.trim().includes(' ')) {
         const [first, ...rest] = cmd.trim().split(/\s+/);
         cmd = first;
@@ -45,7 +44,6 @@ function SyntaxHighLightedCode(props) {
     return <code {...props} ref={ref} />
 }
 
-// Helper to get language from filename for highlight.js
 const getLanguage = (filename) => {
     if (!filename) return 'plaintext'
     if (filename.endsWith('.js')) return 'javascript'
@@ -78,9 +76,11 @@ const Project = () => {
     const [iframeUrl, setIframeUrl] = useState(null)
 
     const [serverProc, setServerProc] = useState(null);
-    
+
     const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
     const [selectedMessages, setSelectedMessages] = useState(new Set());
+
+    const [isDirty, setIsDirty] = useState(false);
 
     const handleUserSelect = (id) => {
         setSelectedUserId(prev => {
@@ -102,41 +102,38 @@ const Project = () => {
     }
 
     function send() {
+        if (!message.trim()) return;
         sendMessage('project-message', {
             message: { text: message },
             user
-        })
-        appendOutgoingMessage({ text: message })
-        setMessage('')
+        });
+        appendOutgoingMessage({ text: message });
+        setMessage('');
     }
 
     const handleMessageSelection = (messageIndex, isChecked) => {
-    setSelectedMessages(prev => {
-        const newSet = new Set(prev);
-        if (isChecked) {
-            newSet.add(messageIndex);
-        } else {
-            newSet.delete(messageIndex);
-        }
-        return newSet;
-    });
-};
+        setSelectedMessages(prev => {
+            const newSet = new Set(prev);
+            if (isChecked) {
+                newSet.add(messageIndex);
+            } else {
+                newSet.delete(messageIndex);
+            }
+            return newSet;
+        });
+    };
 
-    // Handles the final save action
     const handleSaveProject = async () => {
-        // Filter the main messages array based on the indices in our Set
         const messagesToSave = messages.filter((_, index) => selectedMessages.has(index));
-    
         const payload = {
             fileTree: fileTree,
             selectedMessages: messagesToSave
         };
-    
         try {
-            // Use the new PATCH route and endpoint
             const response = await axios.patch(`/projects/${project._id}/save`, payload);
             alert("Project saved successfully!");
-            setIsSaveModalOpen(false); // Close the modal on success
+            setIsSaveModalOpen(false);
+            setIsDirty(false);
         } catch (error) {
             console.error("Failed to save project:", error);
             alert("Error saving project. Please try again.");
@@ -156,14 +153,12 @@ const Project = () => {
             </div>
         )
     }
+
     function deleteFile(filename) {
         if (!fileTree[filename]) return;
-
-        const updatedTree = { ...fileTree };
-        delete updatedTree[filename];
-
+        // Create a new object without the deleted file
+        const { [filename]: _, ...updatedTree } = fileTree;
         setFileTree(updatedTree);
-        saveFileTree(updatedTree); // <-- Make sure this is called
 
         const updatedOpenFiles = openFiles.filter(f => f !== filename);
         setOpenFiles(updatedOpenFiles);
@@ -173,84 +168,114 @@ const Project = () => {
         }
     }
 
+    // --- EFFECT 1: Fetch initial data ONCE ---
     useEffect(() => {
-        initializeSocket(project._id)
-
-        let cleanup = null;
-
-        getWebContainer().then(container => {
-            setWebContainer(container)
-        })
-
-        receiveMessage('project-message', (data) => {
-            console.log(data)
-            let message
-            if (typeof data.message === "string") {
-                try {
-                    message = JSON.parse(data.message)
-                } catch (e) {
-                    message = { text: data.message }
-                }
-            } else {
-                message = data.message
-            }
-
-            // If AI response includes fileTree, update and mount
-            if (message.fileTree) {
-                setFileTree(message.fileTree)
-                if (webContainer) {
-                    webContainer.mount(message.fileTree)
-                }
-            }
-
-            appendIncomingMessage({ ...data, message })
-        })
-
-        axios.get(`/projects/get-project/${location.state.project._id}`).then(res => {
+        axios.get(`/projects/get-project/${project._id}`).then(res => {
             const loadedProject = res.data.project;
             setProject(loadedProject);
-            // If a fileTree exists in the DB and is not empty, load it.
             if (loadedProject.fileTree && Object.keys(loadedProject.fileTree).length > 0) {
                 setFileTree(loadedProject.fileTree);
             }
-
-            // If saved messages exist in the DB, load them.
             if (loadedProject.messages && loadedProject.messages.length > 0) {
                 setMessages(loadedProject.messages);
             }
-        })
-        
+        });
+
         axios.get('/users/all').then(res => {
-            setUsers(res.data.users)
+            setUsers(res.data.users);
         }).catch(err => {
-            console.error("Error fetching users:", err)
-        })
+            console.error("Error fetching users:", err);
+        });
 
-        // Cleanup function for socket listeners
+        getWebContainer().then(setWebContainer);
+    }, [project._id]);
+
+    // --- EFFECT 2: Handle Socket.IO connection and messages ---
+    useEffect(() => {
+        if (!user || !project._id) return;
+
+        const socket = initializeSocket(project._id);
+
+        const handleNewMessage = (data) => {
+            if (data.user?.email === user.email && data.user?.id !== 'ai') {
+                return;
+            }
+
+            let message;
+            try {
+                message = typeof data.message === "string" ? JSON.parse(data.message) : data.message;
+            } catch (e) {
+                message = { text: data.message };
+            }
+
+            appendIncomingMessage({ ...data, message });
+
+            if (message.fileTree && Object.keys(message.fileTree).length > 0) {
+                setFileTree(prevFileTree => ({
+                    ...prevFileTree,
+                    ...message.fileTree
+                }));
+            }
+        };
+
+        const cleanup = receiveMessage('project-message', handleNewMessage);
+
         return () => {
-            if (cleanup) cleanup()
-        }
-    }, [])
+            if (typeof cleanup === 'function') {
+                cleanup();
+            }
+            socket.disconnect();
+        };
+    }, [user, project._id]);
 
-    function saveFileTree(ft) {
-        axios.put('/projects/update-file-tree', {
-            projectId: project._id,
-            fileTree: ft
-        }).then(res => {
-            console.log('✅ File tree saved to DB:', res.data);
-        }).catch(err => {
-            console.error('❌ Error saving file tree to DB:', err);
-        })
-    }
+    // --- EFFECT 3: Auto-scroll chat ---
+    useEffect(() => {
+        scrollToBottom();
+    }, [messages]);
+
+    // Add a new useEffect to track fileTree changes
+    useEffect(() => {
+        // This will run on the initial load, so we check if it's not the initial empty object
+        if (Object.keys(fileTree).length > 0) {
+            setIsDirty(true);
+        }
+    }, [fileTree]);
+
+    // Add a new useEffect to track message changes
+    useEffect(() => {
+        if (messages.length > 0) {
+            setIsDirty(true);
+        }
+    }, [messages]);
+
+    // frontend/src/screens/Project.jsx
+
+    // --- Add this new useEffect for the exit prompt ---
+    useEffect(() => {
+        const handleBeforeUnload = (event) => {
+            if (isDirty) {
+                event.preventDefault();
+                // Most browsers will show a generic message and ignore this custom one for security reasons.
+                event.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+            }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        // Cleanup function to remove the listener when the component unmounts
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
+    }, [isDirty]); // The effect depends on the isDirty state
 
     function scrollToBottom() {
         if (messageBox.current) {
-            messageBox.current.scrollTop = messageBox.current.scrollHeight
+            messageBox.current.scrollTop = messageBox.current.scrollHeight;
         }
     }
 
     function appendIncomingMessage(msg) {
-        setMessages(prev => [...prev, msg])
+        setMessages(prev => [...prev, msg]);
     }
 
     function appendOutgoingMessage(msg) {
@@ -258,12 +283,8 @@ const Project = () => {
             user,
             message: msg,
             timestamp: new Date()
-        }])
+        }]);
     }
-
-    useEffect(() => {
-        scrollToBottom()
-    }, [messages])
 
     const styles = {
         modalBackdrop: {
@@ -276,31 +297,13 @@ const Project = () => {
             width: '90%', maxWidth: '600px', maxHeight: '80vh',
             display: 'flex', flexDirection: 'column',
         },
-        modalHeader: {
-            margin: 0, marginBottom: '15px'
-        },
-        messagesList: {
-            overflowY: 'auto', border: '1px solid #ccc',
-            padding: '10px', flexGrow: 1,
-        },
-        messageItem: {
-            display: 'flex', alignItems: 'center', marginBottom: '8px',
-        },
-        messageLabel: {
-            marginLeft: '10px',
-        },
-        modalActions: {
-            marginTop: '20px', display: 'flex', justifyContent: 'flex-end',
-        },
-        buttonPrimary: {
-            padding: '10px 20px', border: 'none', borderRadius: '5px',
-            backgroundColor: '#28a745', color: 'white', cursor: 'pointer',
-        },
-        buttonSecondary: {
-            padding: '10px 20px', border: 'none', borderRadius: '5px',
-            backgroundColor: '#6c757d', color: 'white', cursor: 'pointer',
-            marginLeft: '10px',
-        }
+        modalHeader: { margin: 0, marginBottom: '15px' },
+        messagesList: { overflowY: 'auto', border: '1px solid #ccc', padding: '10px', flexGrow: 1 },
+        messageItem: { display: 'flex', alignItems: 'center', marginBottom: '8px' },
+        messageLabel: { marginLeft: '10px' },
+        modalActions: { marginTop: '20px', display: 'flex', justifyContent: 'flex-end' },
+        buttonPrimary: { padding: '10px 20px', border: 'none', borderRadius: '5px', backgroundColor: '#28a745', color: 'white', cursor: 'pointer' },
+        buttonSecondary: { padding: '10px 20px', border: 'none', borderRadius: '5px', backgroundColor: '#6c757d', color: 'white', cursor: 'pointer', marginLeft: '10px' }
     };
 
     return (
@@ -319,7 +322,7 @@ const Project = () => {
                     <div ref={messageBox} className="message-box p-1 grow flex flex-col bg-slate-300 gap-1 overflow-auto max-h-full">
                         {messages.map((msg, idx) => (
                             <div key={idx} className={`message flex flex-col p-2 w-fit rounded-md
-                ${msg.user?.id === 'ai'
+                                ${msg.user?.id === 'ai'
                                     ? 'max-w-96 bg-slate-950 text-white'
                                     : msg.user?._id === user._id
                                         ? 'ml-auto max-w-52 bg-slate-50'
@@ -329,7 +332,7 @@ const Project = () => {
                                 <div className='text-sm'>
                                     {msg.user?.id === 'ai'
                                         ? writeAiMessage(msg.message)
-                                        : msg.message?.text || msg.message}
+                                        : msg.message.text}
                                 </div>
                             </div>
                         ))}
@@ -338,6 +341,7 @@ const Project = () => {
                         <input
                             value={message}
                             onChange={(e) => setMessage(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && send()}
                             className='px-4 p-2 border-none outline-none grow'
                             type="text"
                             placeholder='Write your message here' />
@@ -354,12 +358,12 @@ const Project = () => {
                         </button>
                     </header>
                     <div className="users flex flex-col gap-2">
-                        {project.users && project.users.map(user => (
-                            <div className='user cursor-pointer hover:bg-slate-200 p-2 flex gap-2 items-center' key={user._id}>
+                        {project.users && project.users.map(u => (
+                            <div className='user cursor-pointer hover:bg-slate-200 p-2 flex gap-2 items-center' key={u._id}>
                                 <div className='aspect-square rounded-full w-fit h-fit flex items-center justify-center p-5 text-white bg-slate-600'>
                                     <i className='ri-user-fill absolute'></i>
                                 </div>
-                                <h1 className='font-semibold text-lg'>{user.email}</h1>
+                                <h1 className='font-semibold text-lg'>{u.email}</h1>
                             </div>
                         ))}
                     </div>
@@ -372,19 +376,12 @@ const Project = () => {
                             onClick={() => {
                                 const fileName = prompt("Enter new file name (e.g., newfile.js)");
                                 if (!fileName) return;
-
                                 if (fileTree[fileName]) {
                                     alert("File already exists!");
                                     return;
                                 }
-
-                                const updatedTree = {
-                                    ...fileTree,
-                                    [fileName]: { file: { contents: '' } }
-                                };
-
+                                const updatedTree = { ...fileTree, [fileName]: { file: { contents: '' } } };
                                 setFileTree(updatedTree);
-                                saveFileTree(updatedTree);
                                 setCurrentFile(fileName);
                                 setOpenFiles([...new Set([...openFiles, fileName])]);
                             }}
@@ -393,228 +390,111 @@ const Project = () => {
                             + New File
                         </button>
                     </div>
-
                     <div className="file-tree w-full">
                         {Object.keys(fileTree).map((file, index) => (
-                            <button
-                                key={index}
-                                onClick={() => {
-                                    setCurrentFile(file);
-                                    setOpenFiles([...new Set([...openFiles, file])]);
-                                }}
-                                className="tree-element cursor-pointer p-2 px-4 flex items-center gap-2 bg-slate-200 w-full"
-                            >
+                            <button key={index} onClick={() => { setCurrentFile(file); setOpenFiles([...new Set([...openFiles, file])]); }} className="tree-element cursor-pointer p-2 px-4 flex items-center gap-2 bg-slate-200 w-full" >
                                 <p className="font-semibold text-lg">{file}</p>
                             </button>
                         ))}
                     </div>
                 </div>
-
                 <div className="code-editor flex flex-col grow h-full shrink">
                     <div className='top flex justify-between w-full'>
                         <div className="files flex">
-                            {
-                                openFiles.map((file, index) => (
-                                    <button
-                                        key={index}
-                                        onClick={() => setCurrentFile(file)}
-                                        className={`open-file cursor-pointer p-2 px-4 flex items-center w-fit gap-2 bg-slate-300 ${currentFile === file ? 'bg-slate-400' : ''}`}
-                                    >
-                                        <p className='font-semibold text-lg'>{file}</p>
-                                        <i
-                                            className="ri-delete-bin-fill text-red-500 hover:text-red-700 ml-2"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (window.confirm(`Are you sure you want to delete "${file}"?`)) {
-                                                    deleteFile(file); // 🔁 correct usage
-                                                }
-                                            }}
-                                        />
-                                    </button>
-                                ))
-                            }
+                            {openFiles.map((file, index) => (
+                                <button key={index} onClick={() => setCurrentFile(file)} className={`open-file cursor-pointer p-2 px-4 flex items-center w-fit gap-2 bg-slate-300 ${currentFile === file ? 'bg-slate-400' : ''}`} >
+                                    <p className='font-semibold text-lg'>{file}</p>
+                                    <i className="ri-delete-bin-fill text-red-500 hover:text-red-700 ml-2" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Are you sure you want to delete "${file}"?`)) { deleteFile(file); } }} />
+                                </button>
+                            ))}
                         </div>
-
                         <div className="actions">
-                            {/* Inside the 'actions' div in your Project.jsx return statement */}
-                            <button
-                                onClick={() => setIsSaveModalOpen(true)}
-                                className='p-2 px-4 bg-green-600 text-white mr-2'>
+                            <button onClick={() => setIsSaveModalOpen(true)} className='p-2 px-4 bg-green-600 text-white mr-2'>
                                 Save Project
                             </button>
                             <button
                                 onClick={async () => {
-                                    if (!webContainer) {
-                                        console.error("WebContainer not ready.");
-                                        return;
-                                    }
+                                    if (!webContainer) { console.error("WebContainer not ready."); return; }
                                     console.log("▶️ Run button clicked. Mounting files...");
                                     await webContainer.mount(fileTree);
-
-                                    // Find the last AI message with buildCommand and startCommand
-                                    const aiMsg = messages
-                                        .slice() // Create a copy to avoid mutating state
-                                        .reverse() // Start from the newest message
-                                        .find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))
-                                        ?.message;
-
-                                    if (!aiMsg) {
-                                        console.warn("No AI message with build/start commands found. Assuming defaults.");
-                                    }
-
-                                    // --- 1. RUN BUILD COMMAND (npm install) ---
+                                    const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
                                     const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
                                     const buildArr = parseCommand(buildCommand);
-
                                     if (buildArr) {
-                                        console.log(`Starting build command: ${buildArr.join(' ')}`);
                                         const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
-
-                                        // Pipe output to console to see progress/errors
-                                        buildProc.output.pipeTo(new WritableStream({
-                                            write(chunk) {
-                                                console.log(`[npm install]: ${chunk}`);
-                                            }
-                                        }));
-
+                                        buildProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[npm install]: ${chunk}`); } }));
                                         const exitCode = await buildProc.exit;
-                                        if (exitCode !== 0) {
-                                            console.error(`❌ Build process failed with exit code ${exitCode}.`);
-                                            // Optionally, show an error to the user here
-                                            return; // Stop execution if build fails
-                                        }
+                                        if (exitCode !== 0) { console.error(`❌ Build process failed with exit code ${exitCode}.`); return; }
                                         console.log("✅ Build finished successfully.");
                                     }
-
-
-                                    // --- 2. KILL PREVIOUS SERVER (if any) ---
-                                    if (serverProc) {
-                                        console.log("Killing previous server process...");
-                                        try {
-                                            await serverProc.kill();
-                                        } catch (e) {
-                                            console.warn("Failed to kill previous server:", e);
-                                        }
-                                    }
-
-                                    // --- 3. RUN START COMMAND (npm start) ---
+                                    if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
                                     const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
                                     const startArr = parseCommand(startCommand);
-
                                     if (startArr) {
-                                        console.log(`Starting server command: ${startArr.join(' ')}`);
                                         const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
-                                        setServerProc(startProc); // Save reference to kill next time
-
-                                        startProc.output.pipeTo(new WritableStream({
-                                            write(chunk) {
-                                                console.log(`[server output]: ${chunk}`);
-                                            }
-                                        }));
-
-                                        webContainer.on('server-ready', (port, url) => {
-                                            console.log(`✅ Server is ready at: ${url}`);
-                                            setIframeUrl(url);
-                                        });
-                                        webContainer.on('error', (error) => {
-                                            console.error('❌ WebContainer error:', error);
-                                        });
+                                        setServerProc(startProc);
+                                        startProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[server output]: ${chunk}`); } }));
+                                        webContainer.on('server-ready', (port, url) => setIframeUrl(url));
+                                        webContainer.on('error', (error) => console.error('❌ WebContainer error:', error));
                                     }
                                 }}
                                 className='p-2 px-4 bg-blue-500 text-white'>
                                 Run
                             </button>
-
-
                         </div>
                     </div>
                     <div className='bottom flex grow max-w-full shrink overflow-auto'>
-                        {
-                            fileTree[currentFile] && (
-                                <div className='code-editor-area h-full overflow-auto grow bg-slate-50'>
-                                    <pre className='hljs h-full'>
-                                        <code
-                                            className='hljs h-full outline-none'
-                                            contentEditable={true}
-                                            suppressContentEditableWarning={true}
-                                            onBlur={(e) => {
-                                                const updatedContent = e.target.textContent
-                                                const ft = {
-                                                    ...fileTree,
-                                                    [currentFile]: {
-                                                        file: {
-                                                            contents: updatedContent
-                                                        }
-                                                    }
-                                                }
-                                                setFileTree(ft)
-                                                saveFileTree(ft)
-                                            }}
-
-                                            dangerouslySetInnerHTML={{
-                                                __html: hljs.highlight(fileTree[currentFile].file.contents || '', {
-                                                    language: getLanguage(currentFile)
-                                                }).value
-
-                                            }}
-                                            style={{
-                                                whiteSpace: 'pre-wrap',
-                                                paddingBottom: '25rem',
-                                                counterSet: 'line-numbering',
-                                            }}
-                                        />
-                                    </pre>
-                                </div>
-                            )
-                        }
+                        {fileTree[currentFile] && (
+                            <div className='code-editor-area h-full overflow-auto grow bg-slate-50'>
+                                <pre className='hljs h-full'>
+                                    <code
+                                        className='hljs h-full outline-none'
+                                        contentEditable={true}
+                                        suppressContentEditableWarning={true}
+                                        onBlur={(e) => {
+                                            const updatedContent = e.target.textContent;
+                                            const ft = { ...fileTree, [currentFile]: { file: { contents: updatedContent } } };
+                                            setFileTree(ft);
+                                        }}
+                                        dangerouslySetInnerHTML={{ __html: hljs.highlight(fileTree[currentFile]?.file?.contents || '', { language: getLanguage(currentFile) }).value }}
+                                        style={{ whiteSpace: 'pre-wrap', paddingBottom: '25rem' }}
+                                    />
+                                </pre>
+                            </div>
+                        )}
                     </div>
                 </div>
-
-                {iframeUrl && webContainer &&
-                    (<div className="flex flex-col min-w-96 h-full">
+                {iframeUrl && webContainer && (
+                    <div className="flex flex-col min-w-96 h-full">
                         <div className="address-bar">
-                            <input
-                                onChange={(e) => setIframeUrl(e.target.value)}
-                                type='text' value={iframeUrl} className='w-full p-2 px-4 bg-slate-200' />
+                            <input onChange={(e) => setIframeUrl(e.target.value)} type='text' value={iframeUrl} className='w-full p-2 px-4 bg-slate-200' />
                         </div>
                         <iframe src={iframeUrl} className='w-full h-full'></iframe>
-                    </div>)
-                }
-
+                    </div>
+                )}
             </section>
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
                     <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-4 sm:mx-0 p-6 flex flex-col gap-4">
                         <header className="flex justify-between items-center mb-2">
                             <h2 className="text-xl font-bold">Select a User</h2>
-                            <button
-                                className="text-gray-500 hover:text-gray-700"
-                                onClick={() => setIsModalOpen(false)}
-                            >
+                            <button className="text-gray-500 hover:text-gray-700" onClick={() => setIsModalOpen(false)}>
                                 <i className="ri-close-line text-2xl"></i>
                             </button>
                         </header>
                         <div className="users-list flex flex-col items-center gap-2 max-h-72 overflow-y-auto">
-                            {users.map(user => (
-                                <button
-                                    key={user._id}
-                                    className={`user cursor-pointer flex items-center hover:bg-slate-100 ${Array.from(selectedUserId).indexOf(user._id) !== -1 ? 'bg-slate-200 text-black' : ''} gap-3 p-3 rounded-lg transition-colors w-full text-left`}
-                                    onClick={() => handleUserSelect(user._id)}
-                                >
+                            {users.map(u => (
+                                <button key={u._id} className={`user cursor-pointer flex items-center hover:bg-slate-100 ${Array.from(selectedUserId).includes(u._id) ? 'bg-slate-200 text-black' : ''} gap-3 p-3 rounded-lg transition-colors w-full text-left`} onClick={() => handleUserSelect(u._id)}>
                                     <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center text-white">
                                         <i className="ri-user-3-line text-lg"></i>
                                     </div>
-                                    <div className='users-list flex flex-col gap-2 max-h-96 overflow-y-auto'>
-                                        <div className="font-semibold">{user.name}</div>
-                                        <div className="text-xs text-gray-500">{user.email}</div>
+                                    <div>
+                                        <div className="font-semibold">{u.name}</div>
+                                        <div className="text-xs text-gray-500">{u.email}</div>
                                     </div>
                                 </button>
                             ))}
-                            <button
-                                onClick={addcollaborators}
-                                className='bg-slate-950 text-white px-4 py-2 rounded-lg mt-4'>
-                                Add Selected
-                            </button>
+                            <button onClick={addcollaborators} className='bg-slate-950 text-white px-4 py-2 rounded-lg mt-4'>Add Selected</button>
                         </div>
                     </div>
                 </div>
@@ -626,13 +506,7 @@ const Project = () => {
                         <div style={styles.messagesList}>
                             {messages.map((msg, index) => (
                                 <div key={index} style={styles.messageItem}>
-                                    <input
-                                        type="checkbox"
-                                        id={`msg-${index}`}
-                                        onChange={(e) => handleMessageSelection(index, e.target.checked)}
-                                        // You can pre-select all by default if you want
-                                        // defaultChecked={true} 
-                                    />
+                                    <input type="checkbox" id={`msg-${index}`} onChange={(e) => handleMessageSelection(index, e.target.checked)} />
                                     <label htmlFor={`msg-${index}`} style={styles.messageLabel}>
                                         <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
                                     </label>
