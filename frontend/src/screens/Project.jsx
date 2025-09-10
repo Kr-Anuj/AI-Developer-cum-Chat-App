@@ -7,6 +7,7 @@ import Markdown from 'markdown-to-jsx'
 import hljs from 'highlight.js'
 import { getWebContainer } from '../config/webContainer.js'
 import { debounce } from 'lodash'
+import { toast } from 'react-toastify';
 
 function parseCommand(cmdObj) {
     if (!cmdObj) return null;
@@ -136,12 +137,12 @@ const Project = () => {
         const payload = { fileTree, selectedMessages: messagesToSave };
         try {
             await axios.patch(`/projects/${project._id}/save`, payload);
-            alert("Project saved successfully!");
+            toast.success("Project saved successfully!");
             setIsSaveModalOpen(false);
             setIsDirty(false);
         } catch (error) {
             console.error("Failed to save project:", error);
-            alert("Error saving project.");
+            toast.error("Error saving project.");
         }
     };
 
@@ -159,7 +160,7 @@ const Project = () => {
         const messageIds = messagesToDeleteArray.map(msg => msg._id).filter(id => id);
 
         if (messageIds.length === 0) {
-            alert("No saved messages selected to delete.");
+            toast.info("No saved messages selected to delete.");
             return;
         }
 
@@ -167,11 +168,11 @@ const Project = () => {
             try {
                 await axios.patch(`/projects/${project._id}/messages/delete`, { messageIds });
                 setMessages(prev => prev.filter(msg => !messageIds.includes(msg._id)));
-                alert("Messages deleted successfully.");
+                toast.success("Messages deleted successfully.");
                 setIsDeleteModalOpen(false);
             } catch (error) {
                 console.error("Failed to delete messages:", error);
-                alert("Error deleting messages.");
+                toast.error("Error deleting messages.");
             }
         }
     };
@@ -225,13 +226,13 @@ const Project = () => {
                 await serverProc.kill();
                 setServerProc(null); // Clear the process from state
                 setIframeUrl(null); // Clear the iframe
-                alert("Server stopped successfully.");
+                toast.success("Server stopped successfully.");
             } catch (e) {
                 console.warn("Failed to stop server:", e);
-                alert("Failed to stop the server.");
+                toast.error("Failed to stop the server.");
             }
         } else {
-            alert("No server is currently running.");
+            toast.info("No server is currently running.");
         }
     };
 
@@ -393,7 +394,7 @@ const Project = () => {
                             onClick={() => {
                                 const fileName = prompt("Enter new file name (e.g., newfile.js)");
                                 if (!fileName) return;
-                                if (fileTree[fileName]) { alert("File already exists!"); return; }
+                                if (fileTree[fileName]) { toast.info("File already exists!"); return; }
                                 const updatedTree = { ...fileTree, [fileName]: { file: { contents: '' } } };
                                 setFileTree(updatedTree);
                                 setCurrentFile(fileName);

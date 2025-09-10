@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import axios from '../config/axios';
 import { UserContext } from '../context/user.context';
 import { useGoogleReCaptcha } from 'react-google-recaptcha-v3';
+import { toast } from 'react-toastify';
 
 const LoginPage = () => {
     const [step, setStep] = useState('credentials');
@@ -26,7 +27,7 @@ const LoginPage = () => {
     const handleCredentialsSubmit = async (e) => {
         e.preventDefault();
         if (!executeRecaptcha) {
-            alert("reCAPTCHA is not ready yet. Please wait a moment.");
+            toast.info("reCAPTCHA is not ready yet. Please wait a moment.");
             return;
         }
         try {
@@ -39,7 +40,7 @@ const LoginPage = () => {
             setStep('otp');
             setCountdown(60); // Start the timer
         } catch (error) {
-            alert(error.response?.data?.message || 'Login failed. Please check your credentials.');
+            toast.error(error.response?.data?.message || 'Login failed. Please check your credentials.');
         }
     };
     
@@ -53,10 +54,10 @@ const LoginPage = () => {
             // Sending the new CAPTCHA token with the request
             await axios.post('/users/login-password', { email, password, captchaToken });
             
-            alert("A new OTP has been sent.");
+            toast.success("A new OTP has been sent.");
             setCountdown(60); // Restart the timer
         } catch (error) {
-            alert(error.response?.data?.message || 'Failed to resend OTP.');
+            toast.error(error.response?.data?.message || 'Failed to resend OTP.');
         }
     };
 
@@ -68,7 +69,7 @@ const LoginPage = () => {
             setUser(response.data.user);
             navigate('/');
         } catch (error) {
-            alert(error.response?.data?.message || 'OTP verification failed.');
+            toast.error(error.response?.data?.message || 'OTP verification failed.');
             setStep('credentials');
         }
     };
