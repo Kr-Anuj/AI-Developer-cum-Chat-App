@@ -218,6 +218,23 @@ const Project = () => {
         }, 6000) // 6000ms = 6 second delay
     ).current;
 
+    const handleStopServer = async () => {
+        if (serverProc) {
+            console.log("Stopping server process...");
+            try {
+                await serverProc.kill();
+                setServerProc(null); // Clear the process from state
+                setIframeUrl(null); // Clear the iframe
+                alert("Server stopped successfully.");
+            } catch (e) {
+                console.warn("Failed to stop server:", e);
+                alert("Failed to stop the server.");
+            }
+        } else {
+            alert("No server is currently running.");
+        }
+    };
+
     // --- Effects ---
 
     useEffect(() => {
@@ -409,6 +426,14 @@ const Project = () => {
                             <button onClick={() => setIsSaveModalOpen(true)} className='p-2 px-4 bg-green-600 text-white mr-2'>
                                 Save Project
                             </button>
+
+                            {/* STOP BUTTON */}
+                            <button
+                                onClick={handleStopServer}
+                                className='p-2 px-4 bg-red-600 text-white mr-2'>
+                                Stop
+                            </button>
+
                             <button
                                 onClick={async () => {
                                     if (!webContainer) { console.error("WebContainer not ready."); return; }
