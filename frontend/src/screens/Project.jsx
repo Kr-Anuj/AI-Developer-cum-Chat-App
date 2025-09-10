@@ -57,30 +57,40 @@ const getLanguage = (filename) => {
 }
 
 const Project = () => {
-    const location = useLocation()
-    const [isSidePanelOpen, setisSidePanelOpen] = useState(false)
-    const [isModalOpen, setIsModalOpen] = useState(false)
-    const [selectedUserId, setSelectedUserId] = useState(new Set())
-    const [project, setProject] = useState(location.state.project)
-    const [message, setMessage] = useState('')
-    const { user } = useContext(UserContext)
-    const [messages, setMessages] = useState([])
-    const messageBox = useRef()
-    const [users, setUsers] = useState([])
+    const location = useLocation();
+    const { user } = useContext(UserContext);
 
-    const [fileTree, setFileTree] = useState({})
-    const [currentFile, setCurrentFile] = useState(null)
-    const [openFiles, setOpenFiles] = useState([])
-
-    const [webContainer, setWebContainer] = useState(null)
-    const [iframeUrl, setIframeUrl] = useState(null)
-
-    const [serverProc, setServerProc] = useState(null);
-
+    // Component State
+    const [project, setProject] = useState(location.state.project);
+    const [messages, setMessages] = useState([]);
+    const [fileTree, setFileTree] = useState({});
+    const [currentFile, setCurrentFile] = useState(null);
+    const [openFiles, setOpenFiles] = useState([]);
+    const [message, setMessage] = useState('');
+    const [users, setUsers] = useState([]);
+    
+    // UI State
+    const [isSidePanelOpen, setisSidePanelOpen] = useState(false);
+    const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
-    const [selectedMessages, setSelectedMessages] = useState(new Set());
-
+    const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [isDirty, setIsDirty] = useState(false);
+
+    // State for selections in modals
+    const [selectedUserId, setSelectedUserId] = useState(new Set());
+    const [selectedMessages, setSelectedMessages] = useState(new Set());
+    const [messagesToDelete, setMessagesToDelete] = useState(new Set());
+
+    // WebContainer State
+    const [webContainer, setWebContainer] = useState(null);
+    const [iframeUrl, setIframeUrl] = useState(null);
+    const [serverProc, setServerProc] = useState(null);
+    
+    // Refs
+    const messageBox = useRef();
+    const isInitialMount = useRef(true);
+
+    // --- Handlers ---
 
     const handleUserSelect = (id) => {
         setSelectedUserId(prev => {
@@ -111,32 +121,57 @@ const Project = () => {
         setMessage('');
     }
 
-    const handleMessageSelection = (messageIndex, isChecked) => {
+    const handleMessageSelection = (message, isChecked) => {
         setSelectedMessages(prev => {
             const newSet = new Set(prev);
-            if (isChecked) {
-                newSet.add(messageIndex);
-            } else {
-                newSet.delete(messageIndex);
-            }
+            if (isChecked) newSet.add(message);
+            else newSet.delete(message);
             return newSet;
         });
     };
 
     const handleSaveProject = async () => {
-        const messagesToSave = messages.filter((_, index) => selectedMessages.has(index));
-        const payload = {
-            fileTree: fileTree,
-            selectedMessages: messagesToSave
-        };
+        const messagesToSave = Array.from(selectedMessages);
+        const payload = { fileTree, selectedMessages: messagesToSave };
         try {
-            const response = await axios.patch(`/projects/${project._id}/save`, payload);
+            await axios.patch(`/projects/${project._id}/save`, payload);
             alert("Project saved successfully!");
             setIsSaveModalOpen(false);
             setIsDirty(false);
         } catch (error) {
             console.error("Failed to save project:", error);
-            alert("Error saving project. Please try again.");
+            alert("Error saving project.");
+        }
+    };
+    
+    const handleMessageDeletionSelection = (message, isChecked) => {
+        setMessagesToDelete(prev => {
+            const newSet = new Set(prev);
+            if (isChecked) newSet.add(message);
+            else newSet.delete(message);
+            return newSet;
+        });
+    };
+
+    const handleDeleteMessages = async () => {
+        const messagesToDeleteArray = Array.from(messagesToDelete);
+        const messageIds = messagesToDeleteArray.map(msg => msg._id).filter(id => id);
+
+        if (messageIds.length === 0) {
+            alert("No saved messages selected to delete.");
+            return;
+        }
+
+        if (window.confirm("Are you sure you want to permanently delete the selected messages?")) {
+            try {
+                await axios.patch(`/projects/${project._id}/messages/delete`, { messageIds });
+                setMessages(prev => prev.filter(msg => !messageIds.includes(msg._id)));
+                alert("Messages deleted successfully.");
+                setIsDeleteModalOpen(false);
+            } catch (error) {
+                console.error("Failed to delete messages:", error);
+                alert("Error deleting messages.");
+            }
         }
     };
 
@@ -156,7 +191,6 @@ const Project = () => {
 
     function deleteFile(filename) {
         if (!fileTree[filename]) return;
-        // Create a new object without the deleted file
         const { [filename]: _, ...updatedTree } = fileTree;
         setFileTree(updatedTree);
 
@@ -167,136 +201,75 @@ const Project = () => {
             setCurrentFile(updatedOpenFiles[0] || null);
         }
     }
+    
+    // --- Effects ---
 
-    // --- EFFECT 1: Fetch initial data ONCE ---
     useEffect(() => {
         axios.get(`/projects/get-project/${project._id}`).then(res => {
             const loadedProject = res.data.project;
             setProject(loadedProject);
-            if (loadedProject.fileTree && Object.keys(loadedProject.fileTree).length > 0) {
-                setFileTree(loadedProject.fileTree);
-            }
-            if (loadedProject.messages && loadedProject.messages.length > 0) {
-                setMessages(loadedProject.messages);
-            }
+            if (loadedProject.fileTree && Object.keys(loadedProject.fileTree).length > 0) setFileTree(loadedProject.fileTree);
+            if (loadedProject.messages && loadedProject.messages.length > 0) setMessages(loadedProject.messages);
         });
-
-        axios.get('/users/all').then(res => {
-            setUsers(res.data.users);
-        }).catch(err => {
-            console.error("Error fetching users:", err);
-        });
-
+        axios.get('/users/all').then(res => setUsers(res.data.users));
         getWebContainer().then(setWebContainer);
     }, [project._id]);
 
-    // --- EFFECT 2: Handle Socket.IO connection and messages ---
     useEffect(() => {
         if (!user || !project._id) return;
-
         const socket = initializeSocket(project._id);
-
         const handleNewMessage = (data) => {
-            if (data.user?.email === user.email && data.user?.id !== 'ai') {
-                return;
-            }
-
+            if (data.user?.email === user.email && data.user?.id !== 'ai') return;
             let message;
             try {
                 message = typeof data.message === "string" ? JSON.parse(data.message) : data.message;
-            } catch (e) {
-                message = { text: data.message };
-            }
-
+            } catch (e) { message = { text: data.message }; }
             appendIncomingMessage({ ...data, message });
-
             if (message.fileTree && Object.keys(message.fileTree).length > 0) {
-                setFileTree(prevFileTree => ({
-                    ...prevFileTree,
-                    ...message.fileTree
-                }));
+                setFileTree(prev => ({ ...prev, ...message.fileTree }));
             }
         };
-
         const cleanup = receiveMessage('project-message', handleNewMessage);
-
         return () => {
-            if (typeof cleanup === 'function') {
-                cleanup();
-            }
+            if (typeof cleanup === 'function') cleanup();
             socket.disconnect();
         };
     }, [user, project._id]);
-
-    // --- EFFECT 3: Auto-scroll chat ---
+    
     useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
-
-    // Add a new useEffect to track fileTree changes
-    useEffect(() => {
-        // This will run on the initial load, so we check if it's not the initial empty object
-        if (Object.keys(fileTree).length > 0) {
+        if (isInitialMount.current) {
+            isInitialMount.current = false;
+        } else {
             setIsDirty(true);
         }
-    }, [fileTree]);
+    }, [fileTree, messages]);
 
-    // Add a new useEffect to track message changes
-    useEffect(() => {
-        if (messages.length > 0) {
-            setIsDirty(true);
-        }
-    }, [messages]);
-
-    // frontend/src/screens/Project.jsx
-
-    // --- Add this new useEffect for the exit prompt ---
     useEffect(() => {
         const handleBeforeUnload = (event) => {
             if (isDirty) {
                 event.preventDefault();
-                // Most browsers will show a generic message and ignore this custom one for security reasons.
-                event.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+                event.returnValue = '';
             }
         };
-
         window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isDirty]);
 
-        // Cleanup function to remove the listener when the component unmounts
-        return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-        };
-    }, [isDirty]); // The effect depends on the isDirty state
+    useEffect(() => {
+        scrollToBottom();
+    }, [messages]);
 
     function scrollToBottom() {
         if (messageBox.current) {
             messageBox.current.scrollTop = messageBox.current.scrollHeight;
         }
     }
-
-    function appendIncomingMessage(msg) {
-        setMessages(prev => [...prev, msg]);
-    }
-
-    function appendOutgoingMessage(msg) {
-        setMessages(prev => [...prev, {
-            user,
-            message: msg,
-            timestamp: new Date()
-        }]);
-    }
+    function appendIncomingMessage(msg) { setMessages(prev => [...prev, msg]); }
+    function appendOutgoingMessage(msg) { setMessages(prev => [...prev, { user, message: msg, timestamp: new Date() }]); }
 
     const styles = {
-        modalBackdrop: {
-            position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
-            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
-            justifyContent: 'center', alignItems: 'center', zIndex: 1000,
-        },
-        modalContent: {
-            backgroundColor: 'white', padding: '20px', borderRadius: '8px',
-            width: '90%', maxWidth: '600px', maxHeight: '80vh',
-            display: 'flex', flexDirection: 'column',
-        },
+        modalBackdrop: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+        modalContent: { backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '90%', maxWidth: '600px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' },
         modalHeader: { margin: 0, marginBottom: '15px' },
         messagesList: { overflowY: 'auto', border: '1px solid #ccc', padding: '10px', flexGrow: 1 },
         messageItem: { display: 'flex', alignItems: 'center', marginBottom: '8px' },
@@ -314,25 +287,23 @@ const Project = () => {
                         <i className="ri-user-add-line mr-1"></i>
                         <p>Add Collaborator</p>
                     </button>
-                    <button onClick={() => setisSidePanelOpen(!isSidePanelOpen)} className='p-2 cursor-pointer'>
-                        <i className="ri-group-fill"></i>
-                    </button>
+                    <div>
+                        <button onClick={() => setIsDeleteModalOpen(true)} className='p-2 cursor-pointer' title="Manage Saved Messages">
+                            <i className="ri-chat-delete-line"></i>
+                        </button>
+                        <button onClick={() => setisSidePanelOpen(!isSidePanelOpen)} className='p-2 cursor-pointer'>
+                            <i className="ri-group-fill"></i>
+                        </button>
+                    </div>
                 </header>
                 <div className="conversation-area pt-14 pb-10 grow flex flex-col h-full relative">
                     <div ref={messageBox} className="message-box p-1 grow flex flex-col bg-slate-300 gap-1 overflow-auto max-h-full">
                         {messages.map((msg, idx) => (
-                            <div key={idx} className={`message flex flex-col p-2 w-fit rounded-md
-                                ${msg.user?.id === 'ai'
-                                    ? 'max-w-96 bg-slate-950 text-white'
-                                    : msg.user?._id === user._id
-                                        ? 'ml-auto max-w-52 bg-slate-50'
-                                        : 'max-w-54 bg-slate-50'
-                                }`}>
+                            <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
+                                ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
                                 <small className='opacity-65 text-xs'>{msg.user?.email}</small>
                                 <div className='text-sm'>
-                                    {msg.user?.id === 'ai'
-                                        ? writeAiMessage(msg.message)
-                                        : msg.message.text}
+                                    {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
                                 </div>
                             </div>
                         ))}
@@ -376,10 +347,7 @@ const Project = () => {
                             onClick={() => {
                                 const fileName = prompt("Enter new file name (e.g., newfile.js)");
                                 if (!fileName) return;
-                                if (fileTree[fileName]) {
-                                    alert("File already exists!");
-                                    return;
-                                }
+                                if (fileTree[fileName]) { alert("File already exists!"); return; }
                                 const updatedTree = { ...fileTree, [fileName]: { file: { contents: '' } } };
                                 setFileTree(updatedTree);
                                 setCurrentFile(fileName);
@@ -415,7 +383,6 @@ const Project = () => {
                             <button
                                 onClick={async () => {
                                     if (!webContainer) { console.error("WebContainer not ready."); return; }
-                                    console.log("▶️ Run button clicked. Mounting files...");
                                     await webContainer.mount(fileTree);
                                     const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
                                     const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
@@ -425,7 +392,6 @@ const Project = () => {
                                         buildProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[npm install]: ${chunk}`); } }));
                                         const exitCode = await buildProc.exit;
                                         if (exitCode !== 0) { console.error(`❌ Build process failed with exit code ${exitCode}.`); return; }
-                                        console.log("✅ Build finished successfully.");
                                     }
                                     if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
                                     const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
@@ -505,8 +471,8 @@ const Project = () => {
                         <h2 style={styles.modalHeader}>Select Messages to Save</h2>
                         <div style={styles.messagesList}>
                             {messages.map((msg, index) => (
-                                <div key={index} style={styles.messageItem}>
-                                    <input type="checkbox" id={`msg-${index}`} onChange={(e) => handleMessageSelection(index, e.target.checked)} />
+                                <div key={msg._id || index} style={styles.messageItem}>
+                                    <input type="checkbox" id={`msg-${index}`} onChange={(e) => handleMessageSelection(msg, e.target.checked)} />
                                     <label htmlFor={`msg-${index}`} style={styles.messageLabel}>
                                         <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
                                     </label>
@@ -514,8 +480,34 @@ const Project = () => {
                             ))}
                         </div>
                         <div style={styles.modalActions}>
-                            <button onClick={handleSaveProject} style={styles.buttonPrimary}>Save Now</button>
+                            <button onClick={handleSaveProject} style={styles.buttonPrimary}>Save Selected</button>
                             <button onClick={() => setIsSaveModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {isDeleteModalOpen && (
+                <div style={styles.modalBackdrop}>
+                    <div style={styles.modalContent}>
+                        <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
+                        <p style={{color: '#6c757d', marginTop: '-10px', marginBottom: '15px'}}>Only messages saved to the database are shown here.</p>
+                        <div style={styles.messagesList}>
+                            {messages.filter(msg => msg._id).length > 0 ? (
+                                messages.filter(msg => msg._id).map((msg, index) => (
+                                    <div key={msg._id} style={styles.messageItem}>
+                                        <input type="checkbox" id={`del-msg-${index}`} onChange={(e) => handleMessageDeletionSelection(msg, e.target.checked)} />
+                                        <label htmlFor={`del-msg-${index}`} style={styles.messageLabel}>
+                                            <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
+                                        </label>
+                                    </div>
+                                ))
+                            ) : (
+                                <p>No messages have been saved to the database yet.</p>
+                            )}
+                        </div>
+                        <div style={styles.modalActions}>
+                            <button onClick={handleDeleteMessages} style={{...styles.buttonPrimary, backgroundColor: '#dc3545'}}>Delete Selected</button>
+                            <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
                         </div>
                     </div>
                 </div>

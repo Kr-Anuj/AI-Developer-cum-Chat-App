@@ -1,6 +1,16 @@
 import mongoose from 'mongoose';
 
-const { Schema } = mongoose; // ✅ Destructure Schema from mongoose
+const { Schema } = mongoose;
+
+// Dedicated schema for messages
+const messageSchema = new Schema({
+    user: { type: Object, required: true },
+    message: { type: Object, required: true },
+    timestamp: { type: Date, default: Date.now }
+}, { 
+    _id: true, // Ensure _id is created for each message subdocument
+    timestamps: false // We use our own timestamp field, so disable this for the sub-schema
+});
 
 const projectSchema = new Schema({
     name: {
@@ -10,22 +20,17 @@ const projectSchema = new Schema({
         trim: true,
         unique: [true, 'Project name already exists'],
     },
-
     users: [{
         type: Schema.Types.ObjectId,
         ref: 'user',
     }],
-
     fileTree: {
-        type: Schema.Types.Mixed,  // ✅ Now Schema is defined
+        type: Object,
         default: {}
     },
-
-    messages: [{
-        type: Schema.Types.Mixed,
-        default: []
-    }]
-}, { timestamps: true, minimize: false }); // ✅ Recommended to prevent empty object stripping
+    // Use the messageSchema for the messages array
+    messages: [messageSchema]
+}, { timestamps: true, minimize: false });
 
 const Project = mongoose.model('project', projectSchema);
 

@@ -42,4 +42,9 @@ router.patch('/:projectId/save',
     projectController.saveProjectState
 )
 
+router.patch('/:projectId/messages/delete',
+    authMiddleWare.authUser,
+    projectController.deleteMessages
+);
+
 export default router;
