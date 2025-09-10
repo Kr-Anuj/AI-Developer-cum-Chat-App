@@ -6,6 +6,7 @@ import { UserContext } from '../context/user.context'
 import Markdown from 'markdown-to-jsx'
 import hljs from 'highlight.js'
 import { getWebContainer } from '../config/webContainer.js'
+import { debounce } from 'lodash'
 
 function parseCommand(cmdObj) {
     if (!cmdObj) return null;
@@ -68,7 +69,7 @@ const Project = () => {
     const [openFiles, setOpenFiles] = useState([]);
     const [message, setMessage] = useState('');
     const [users, setUsers] = useState([]);
-    
+
     // UI State
     const [isSidePanelOpen, setisSidePanelOpen] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -85,7 +86,7 @@ const Project = () => {
     const [webContainer, setWebContainer] = useState(null);
     const [iframeUrl, setIframeUrl] = useState(null);
     const [serverProc, setServerProc] = useState(null);
-    
+
     // Refs
     const messageBox = useRef();
     const isInitialMount = useRef(true);
@@ -143,7 +144,7 @@ const Project = () => {
             alert("Error saving project.");
         }
     };
-    
+
     const handleMessageDeletionSelection = (message, isChecked) => {
         setMessagesToDelete(prev => {
             const newSet = new Set(prev);
@@ -201,7 +202,22 @@ const Project = () => {
             setCurrentFile(updatedOpenFiles[0] || null);
         }
     }
-    
+
+    // Debounced auto-save function
+    const autoSaveProject = useRef(
+        debounce((latestFileTree, latestMessages) => {
+            console.log("Auto-saving project...");
+            const payload = {
+                fileTree: latestFileTree,
+                selectedMessages: latestMessages // Save all current messages
+            };
+            // Using the project._id directly from state
+            axios.patch(`/projects/${project._id}/save`, payload)
+                .then(() => console.log("✅ Project auto-saved."))
+                .catch(err => console.error("Auto-save failed:", err));
+        }, 6000) // 6000ms = 6 second delay
+    ).current;
+
     // --- Effects ---
 
     useEffect(() => {
@@ -235,7 +251,7 @@ const Project = () => {
             socket.disconnect();
         };
     }, [user, project._id]);
-    
+
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
@@ -258,6 +274,19 @@ const Project = () => {
     useEffect(() => {
         scrollToBottom();
     }, [messages]);
+
+    // UseEffect to trigger the auto-save
+    useEffect(() => {
+        // Don't auto-save on the initial load
+        if (isInitialMount.current) {
+            isInitialMount.current = false;
+            return;
+        }
+
+        // Calling the debounced function with the latest state
+        autoSaveProject(fileTree, messages);
+
+    }, [fileTree, messages, autoSaveProject]); // This effect runs when data changes
 
     function scrollToBottom() {
         if (messageBox.current) {
@@ -490,7 +519,7 @@ const Project = () => {
                 <div style={styles.modalBackdrop}>
                     <div style={styles.modalContent}>
                         <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
-                        <p style={{color: '#6c757d', marginTop: '-10px', marginBottom: '15px'}}>Only messages saved to the database are shown here.</p>
+                        <p style={{ color: '#6c757d', marginTop: '-10px', marginBottom: '15px' }}>Only messages saved to the database are shown here.</p>
                         <div style={styles.messagesList}>
                             {messages.filter(msg => msg._id).length > 0 ? (
                                 messages.filter(msg => msg._id).map((msg, index) => (
@@ -506,7 +535,7 @@ const Project = () => {
                             )}
                         </div>
                         <div style={styles.modalActions}>
-                            <button onClick={handleDeleteMessages} style={{...styles.buttonPrimary, backgroundColor: '#dc3545'}}>Delete Selected</button>
+                            <button onClick={handleDeleteMessages} style={{ ...styles.buttonPrimary, backgroundColor: '#dc3545' }}>Delete Selected</button>
                             <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
                         </div>
                     </div>
