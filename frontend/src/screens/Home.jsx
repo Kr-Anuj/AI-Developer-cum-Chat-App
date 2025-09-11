@@ -5,78 +5,91 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify';
 
 const Home = () => {
-
     const { user } = useContext(UserContext)
-    const [ isModalOpen, setIsModalOpen ] = useState(false)
-    const [ projectName, setProjectName ] = useState(null)
-    const [ project, setProject ] = useState([])
-
+    const [isModalOpen, setIsModalOpen] = useState(false)
+    const [projectName, setProjectName] = useState('')
+    const [projects, setProjects] = useState([])
+    const [isLoading, setIsLoading] = useState(true); // For loading state
     const navigate = useNavigate()
 
     function createProject(e) {
         e.preventDefault()
-        console.log({ projectName })
-
         axios.post('/projects/create', {
             name: projectName,
         })
-            .then((res) => {
-                console.log(res)
-                setIsModalOpen(false)
-            })
-            .catch((error) => {
-                console.log(error)
-            })
+        .then((res) => {
+            // Add the new project to the list without needing a full refetch
+            setProjects(prevProjects => [...prevProjects, res.data]);
+            setIsModalOpen(false)
+            setProjectName('');
+            toast.success(`Project "${res.data.name}" created!`);
+        })
+        .catch((error) => {
+            toast.error(error.response?.data || "Failed to create project.");
+        })
     }
 
     useEffect(() => {
+        setIsLoading(true);
         axios.get('/projects/all').then((res) => {
-            setProject(res.data.projects)
-
+            setProjects(res.data.projects)
         }).catch(err => {
             console.log(err)
-        })
-
+            toast.error("Could not load projects.");
+        }).finally(() => {
+            setIsLoading(false);
+        });
     }, [])
+
+    const renderProjects = () => {
+        if (isLoading) {
+            return <p className="text-gray-500">Loading projects...</p>;
+        }
+
+        if (projects.length === 0) {
+            return (
+                <div className="text-center p-8 border-2 border-dashed rounded-lg col-span-full">
+                    <h2 className="text-xl font-semibold mb-2">No Projects Found</h2>
+                    <p className="mb-4">Get started by creating your first project.</p>
+                </div>
+            );
+        }
+
+        return (
+            <>
+                {projects.map((project) => (
+                    <div key={project._id}
+                        onClick={() => {
+                            navigate(`/project`, {
+                                state: { project }
+                            })
+                        }}
+                        className="project flex flex-col gap-2 cursor-pointer p-4 border border-slate-300 rounded-md min-w-52 hover:bg-slate-200 transition-colors">
+                        <h2 className='font-semibold'>{project.name}</h2>
+                        <div className="flex gap-2 items-center text-gray-600">
+                            <i className="ri-user-line"></i>
+                            <small>Collaborators: {project.users.length}</small>
+                        </div>
+                    </div>
+                ))}
+            </>
+        );
+    }
 
     return (
         <main className='p-4'>
             <div className="projects flex flex-wrap gap-3">
                 <button
                     onClick={() => setIsModalOpen(true)}
-                    className="project p-4 border border-slate-300 rounded-md">
-                    New Project
-                    <i className="ri-link ml-2"></i>
+                    className="project p-4 border border-slate-300 rounded-md hover:bg-slate-100 transition-colors">
+                    + New Project
                 </button>
-
-                {
-                    project.map((project) => (
-                        <div key={project._id}
-                            onClick={() => {
-                                navigate(`/project`, {
-                                    state: { project }
-                                })
-                            }}
-                            className="project flex flex-col gap-2 cursor-pointer p-4 border border-slate-300 rounded-md min-w-52 hover:bg-slate-200">
-                            <h2
-                                className='font-semibold'
-                            >{project.name}</h2>
-
-                            <div className="flex gap-2">
-                                <p> <small> <i className="ri-user-line"></i> Collaborators</small> :</p>
-                                {project.users.length}
-                            </div>
-
-                        </div>
-                    ))
-                }
-
-
+                {renderProjects()}
             </div>
 
             {isModalOpen && (
                 <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50">
-                    <div className="bg-white p-6 rounded-md shadow-md w-1/3">
+                    <div className="bg-white p-6 rounded-md shadow-md w-full max-w-md mx-4">
                         <h2 className="text-xl mb-4">Create New Project</h2>
                         <form onSubmit={createProject}>
                             <div className="mb-4">
@@ -94,8 +107,6 @@ const Home = () => {
                     </div>
                 </div>
             )}
-
-
         </main>
     )
 }
