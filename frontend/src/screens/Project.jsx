@@ -321,7 +321,7 @@ const Project = () => {
             </div>
             <main className='h-full w-full flex overflow-hidden'>
                 <section className='left relative flex flex-col h-full min-w-96 bg-slate-300'>
-                    <header className='flex justify-between items-center p-2 px-4 w-full bg-slate-100 h-14'>
+                    <header className='flex justify-between items-center p-2 px-4 w-full bg-slate-100 h-14 shrink-0'>
                         <button className='flex gap-2 cursor-pointer' onClick={() => setIsModalOpen(true)}>
                             <i className="ri-user-add-line mr-1"></i>
                             <p>Add Collaborator</p>
@@ -335,23 +335,26 @@ const Project = () => {
                             </button>
                         </div>
                     </header>
-                    <div className="conversation-area pt-14 pb-10 grow flex flex-col h-full relative">
-                        <div ref={messageBox} className="message-box p-1 grow flex flex-col bg-slate-300 gap-1 overflow-auto max-h-full">
-                            {messages.map((msg, idx) => (
-                                <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
-                                    ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user?._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
-                                    <small className='opacity-65 text-xs'>{msg.user?.email}</small>
-                                    <div className='text-sm'>
-                                        {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
-                                    </div>
+                    
+                    {/* CORRECTED: Message container that grows and scrolls */}
+                    <div ref={messageBox} className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 bg-slate-300">
+                        {messages.map((msg, idx) => (
+                            <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
+                                ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user?._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
+                                <small className='opacity-65 text-xs'>{msg.user?.email}</small>
+                                <div className='text-sm'>
+                                    {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
                                 </div>
-                            ))}
-                        </div>
-                        <div className="input-field w-full flex absolute bottom-0 bg-white">
-                            <input value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
-                            <button onClick={send} className='px-5 bg-slate-950 text-white'><i className="ri-send-plane-fill"></i></button>
-                        </div>
+                            </div>
+                        ))}
                     </div>
+
+                    {/* CORRECTED: Input field is now part of the main flex column */}
+                    <div className="input-field w-full flex bg-white shrink-0">
+                        <input value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
+                        <button onClick={send} className='px-5 bg-slate-950 text-white'><i className="ri-send-plane-fill"></i></button>
+                    </div>
+
                     <div className={`sidepanel w-full h-full flex flex-col gap-2 bg-slate-50 absolute transition-all ${isSidePanelOpen ? 'translate-x-0' : '-translate-x-full'} top-0`}>
                         <header className='flex justify-between items-center p-2 px-3 bg-slate-200'>
                             <h1 className='font-semibold text-lg'>Collaborators</h1>
