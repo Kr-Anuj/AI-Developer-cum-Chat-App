@@ -76,7 +76,7 @@ const Project = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-    const [isDirty, setIsDirty] = useState(false);
+    const [saveStatus, setSaveStatus] = useState('saved');
 
     // State for selections in modals
     const [selectedUserId, setSelectedUserId] = useState(new Set());
@@ -91,6 +91,26 @@ const Project = () => {
     // Refs
     const messageBox = useRef();
     const isInitialMount = useRef(true);
+
+    // Debounced auto-save function
+    const autoSaveProject = useRef(
+        debounce((latestFileTree, latestMessages, currentProject) => {
+            setSaveStatus('saving');
+            const payload = {
+                fileTree: latestFileTree,
+                selectedMessages: latestMessages
+            };
+            axios.patch(`/projects/${currentProject._id}/save`, payload)
+                .then(() => {
+                    console.log("✅ Project auto-saved.");
+                    setSaveStatus('saved');
+                })
+                .catch(err => {
+                    console.error("Auto-save failed:", err);
+                    setSaveStatus('dirty');
+                });
+        }, 2000)
+    ).current;
 
     // --- Handlers ---
 
@@ -136,16 +156,18 @@ const Project = () => {
         const messagesToSave = Array.from(selectedMessages);
         const payload = { fileTree, selectedMessages: messagesToSave };
         try {
+            setSaveStatus('saving');
             await axios.patch(`/projects/${project._id}/save`, payload);
             toast.success("Project saved successfully!");
             setIsSaveModalOpen(false);
-            setIsDirty(false);
+            setSaveStatus('saved');
         } catch (error) {
             console.error("Failed to save project:", error);
             toast.error("Error saving project.");
+            setSaveStatus('dirty');
         }
     };
-
+    
     const handleMessageDeletionSelection = (message, isChecked) => {
         setMessagesToDelete(prev => {
             const newSet = new Set(prev);
@@ -177,19 +199,27 @@ const Project = () => {
         }
     };
 
+    const handleStopServer = async () => {
+        if (serverProc) {
+            console.log("Stopping server process...");
+            try {
+                await serverProc.kill();
+                setServerProc(null);
+                setIframeUrl(null);
+                toast.success("Server stopped successfully.");
+            } catch (e) {
+                console.warn("Failed to stop server:", e);
+                toast.error("Failed to stop the server.");
+            }
+        } else {
+            toast.info("No server is currently running.");
+        }
+    };
+
     function writeAiMessage(message) {
-        const messageObject = typeof message === "string" ? JSON.parse(message) : message
-        return (
-            <div className='overflow-auto bg-slate-950 text-white rounded-sm p-2'>
-                <Markdown
-                    children={messageObject.text}
-                    options={{
-                        overrides: { code: SyntaxHighLightedCode },
-                    }}
-                />
-            </div>
-        )
-    }
+        const messageObject = typeof message === "string" ? JSON.parse(message) : message;
+        return (<div className='overflow-auto bg-slate-950 text-white rounded-sm p-2'><Markdown options={{ overrides: { code: SyntaxHighLightedCode } }}>{messageObject.text || ''}</Markdown></div>);
+    };
 
     function deleteFile(filename) {
         if (!fileTree[filename]) return;
@@ -203,39 +233,7 @@ const Project = () => {
             setCurrentFile(updatedOpenFiles[0] || null);
         }
     }
-
-    // Debounced auto-save function
-    const autoSaveProject = useRef(
-        debounce((latestFileTree, latestMessages) => {
-            console.log("Auto-saving project...");
-            const payload = {
-                fileTree: latestFileTree,
-                selectedMessages: latestMessages // Save all current messages
-            };
-            // Using the project._id directly from state
-            axios.patch(`/projects/${project._id}/save`, payload)
-                .then(() => console.log("✅ Project auto-saved."))
-                .catch(err => console.error("Auto-save failed:", err));
-        }, 6000) // 6000ms = 6 second delay
-    ).current;
-
-    const handleStopServer = async () => {
-        if (serverProc) {
-            console.log("Stopping server process...");
-            try {
-                await serverProc.kill();
-                setServerProc(null); // Clear the process from state
-                setIframeUrl(null); // Clear the iframe
-                toast.success("Server stopped successfully.");
-            } catch (e) {
-                console.warn("Failed to stop server:", e);
-                toast.error("Failed to stop the server.");
-            }
-        } else {
-            toast.info("No server is currently running.");
-        }
-    };
-
+    
     // --- Effects ---
 
     useEffect(() => {
@@ -264,55 +262,31 @@ const Project = () => {
             }
         };
         const cleanup = receiveMessage('project-message', handleNewMessage);
-        return () => {
-            if (typeof cleanup === 'function') cleanup();
-            socket.disconnect();
-        };
+        return () => { if (typeof cleanup === 'function') cleanup(); socket.disconnect(); };
     }, [user, project._id]);
-
+    
     useEffect(() => {
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-        } else {
-            setIsDirty(true);
-        }
-    }, [fileTree, messages]);
-
-    useEffect(() => {
-        const handleBeforeUnload = (event) => {
-            if (isDirty) {
-                event.preventDefault();
-                event.returnValue = '';
-            }
-        };
-        window.addEventListener('beforeunload', handleBeforeUnload);
-        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [isDirty]);
-
-    useEffect(() => {
-        scrollToBottom();
-    }, [messages]);
-
-    // UseEffect to trigger the auto-save
-    useEffect(() => {
-        // Don't auto-save on the initial load
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
+        setSaveStatus('dirty');
+        autoSaveProject(fileTree, messages, project);
+    }, [fileTree, messages, project, autoSaveProject]);
 
-        // Calling the debounced function with the latest state
-        autoSaveProject(fileTree, messages);
+    useEffect(() => {
+        const handleBeforeUnload = (event) => {
+            if (saveStatus === 'dirty') { event.preventDefault(); event.returnValue = ''; }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [saveStatus]);
 
-    }, [fileTree, messages, autoSaveProject]); // This effect runs when data changes
+    useEffect(() => { scrollToBottom(); }, [messages]);
 
-    function scrollToBottom() {
-        if (messageBox.current) {
-            messageBox.current.scrollTop = messageBox.current.scrollHeight;
-        }
-    }
-    function appendIncomingMessage(msg) { setMessages(prev => [...prev, msg]); }
-    function appendOutgoingMessage(msg) { setMessages(prev => [...prev, { user, message: msg, timestamp: new Date() }]); }
+    const scrollToBottom = () => { if (messageBox.current) { messageBox.current.scrollTop = messageBox.current.scrollHeight; } };
+    const appendIncomingMessage = (msg) => { setMessages(prev => [...prev, msg]); };
+    const appendOutgoingMessage = (msg) => { setMessages(prev => [...prev, { user, message: msg, timestamp: new Date() }]); };
 
     const styles = {
         modalBackdrop: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
@@ -326,249 +300,253 @@ const Project = () => {
         buttonSecondary: { padding: '10px 20px', border: 'none', borderRadius: '5px', backgroundColor: '#6c757d', color: 'white', cursor: 'pointer', marginLeft: '10px' }
     };
 
+    const renderSaveStatus = () => {
+        switch (saveStatus) {
+            case 'saving':
+                return <span style={{ color: 'white' }}>Saving...</span>;
+            case 'saved':
+                return <span style={{ color: 'white' }}>✅ All changes saved</span>;
+            case 'dirty':
+                return <span style={{ color: 'white' }}>Unsaved changes...</span>;
+            default:
+                return null;
+        }
+    };
+
     return (
-        <main className='h-screen w-screen flex'>
-            <section className='left relative flex flex-col h-screen min-w-96 bg-slate-300'>
-                <header className='flex justify-between items-center p-2 px-4 w-full bg-slate-100 absolute top-0 z-10 h-14'>
-                    <button className='flex gap-2 cursor-pointer' onClick={() => setIsModalOpen(true)}>
-                        <i className="ri-user-add-line mr-1"></i>
-                        <p>Add Collaborator</p>
-                    </button>
-                    <div>
-                        <button onClick={() => setIsDeleteModalOpen(true)} className='p-2 cursor-pointer' title="Manage Saved Messages">
-                            <i className="ri-chat-delete-line"></i>
+        <div className='w-screen h-screen flex flex-col bg-gray-700'>
+            <div className="statusBar">
+                <span className="font-semibold">{project.name}</span>
+                {renderSaveStatus()}
+            </div>
+            <main className='h-full w-full flex overflow-hidden'>
+                <section className='left relative flex flex-col h-full min-w-96 bg-slate-300'>
+                    <header className='flex justify-between items-center p-2 px-4 w-full bg-slate-100 h-14'>
+                        <button className='flex gap-2 cursor-pointer' onClick={() => setIsModalOpen(true)}>
+                            <i className="ri-user-add-line mr-1"></i>
+                            <p>Add Collaborator</p>
                         </button>
-                        <button onClick={() => setisSidePanelOpen(!isSidePanelOpen)} className='p-2 cursor-pointer'>
-                            <i className="ri-group-fill"></i>
-                        </button>
-                    </div>
-                </header>
-                <div className="conversation-area pt-14 pb-10 grow flex flex-col h-full relative">
-                    <div ref={messageBox} className="message-box p-1 grow flex flex-col bg-slate-300 gap-1 overflow-auto max-h-full">
-                        {messages.map((msg, idx) => (
-                            <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
-                                ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
-                                <small className='opacity-65 text-xs'>{msg.user?.email}</small>
-                                <div className='text-sm'>
-                                    {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="input-field w-full flex absolute bottom-0 bg-white">
-                        <input
-                            value={message}
-                            onChange={(e) => setMessage(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && send()}
-                            className='px-4 p-2 border-none outline-none grow'
-                            type="text"
-                            placeholder='Write your message here' />
-                        <button onClick={send} className='px-5 bg-slate-950 text-white'>
-                            <i className="ri-send-plane-fill"></i>
-                        </button>
-                    </div>
-                </div>
-                <div className={`sidepanel w-full h-full flex flex-col gap-2 bg-slate-50 absolute transition-all ${isSidePanelOpen ? 'translate-x-0' : '-translate-x-full'} top-0`}>
-                    <header className='flex justify-between items-center p-2 px-3 bg-slate-200'>
-                        <h1 className='font-semibold text-lg'>Collaborators</h1>
-                        <button className='p-2 cursor-pointer' onClick={() => setisSidePanelOpen(!isSidePanelOpen)}>
-                            <i className='ri-close-fill'></i>
-                        </button>
-                    </header>
-                    <div className="users flex flex-col gap-2">
-                        {project.users && project.users.map(u => (
-                            <div className='user cursor-pointer hover:bg-slate-200 p-2 flex gap-2 items-center' key={u._id}>
-                                <div className='aspect-square rounded-full w-fit h-fit flex items-center justify-center p-5 text-white bg-slate-600'>
-                                    <i className='ri-user-fill absolute'></i>
-                                </div>
-                                <h1 className='font-semibold text-lg'>{u.email}</h1>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </section>
-            <section className="right bg-red-50 grow h-full flex">
-                <div className="explorer h-full max-w-64 bg-slate-400 min-w-52 flex flex-col">
-                    <div className="p-2 bg-slate-300">
-                        <button
-                            onClick={() => {
-                                const fileName = prompt("Enter new file name (e.g., newfile.js)");
-                                if (!fileName) return;
-                                if (fileTree[fileName]) { toast.info("File already exists!"); return; }
-                                const updatedTree = { ...fileTree, [fileName]: { file: { contents: '' } } };
-                                setFileTree(updatedTree);
-                                setCurrentFile(fileName);
-                                setOpenFiles([...new Set([...openFiles, fileName])]);
-                            }}
-                            className="w-full bg-green-600 hover:bg-green-700 text-white py-1 px-2 rounded"
-                        >
-                            + New File
-                        </button>
-                    </div>
-                    <div className="file-tree w-full">
-                        {Object.keys(fileTree).map((file, index) => (
-                            <button key={index} onClick={() => { setCurrentFile(file); setOpenFiles([...new Set([...openFiles, file])]); }} className="tree-element cursor-pointer p-2 px-4 flex items-center gap-2 bg-slate-200 w-full" >
-                                <p className="font-semibold text-lg">{file}</p>
+                        <div>
+                            <button onClick={() => setIsDeleteModalOpen(true)} className='p-2 cursor-pointer' title="Manage Saved Messages">
+                                <i className="ri-chat-delete-line"></i>
                             </button>
-                        ))}
+                            <button onClick={() => setisSidePanelOpen(!isSidePanelOpen)} className='p-2 cursor-pointer'>
+                                <i className="ri-group-fill"></i>
+                            </button>
+                        </div>
+                    </header>
+                    <div className="conversation-area pt-14 pb-10 grow flex flex-col h-full relative">
+                        <div ref={messageBox} className="message-box p-1 grow flex flex-col bg-slate-300 gap-1 overflow-auto max-h-full">
+                            {messages.map((msg, idx) => (
+                                <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
+                                    ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user?._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
+                                    <small className='opacity-65 text-xs'>{msg.user?.email}</small>
+                                    <div className='text-sm'>
+                                        {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="input-field w-full flex absolute bottom-0 bg-white">
+                            <input value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
+                            <button onClick={send} className='px-5 bg-slate-950 text-white'><i className="ri-send-plane-fill"></i></button>
+                        </div>
                     </div>
-                </div>
-                <div className="code-editor flex flex-col grow h-full shrink">
-                    <div className='top flex justify-between w-full'>
-                        <div className="files flex">
-                            {openFiles.map((file, index) => (
-                                <button key={index} onClick={() => setCurrentFile(file)} className={`open-file cursor-pointer p-2 px-4 flex items-center w-fit gap-2 bg-slate-300 ${currentFile === file ? 'bg-slate-400' : ''}`} >
-                                    <p className='font-semibold text-lg'>{file}</p>
-                                    <i className="ri-delete-bin-fill text-red-500 hover:text-red-700 ml-2" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Are you sure you want to delete "${file}"?`)) { deleteFile(file); } }} />
+                    <div className={`sidepanel w-full h-full flex flex-col gap-2 bg-slate-50 absolute transition-all ${isSidePanelOpen ? 'translate-x-0' : '-translate-x-full'} top-0`}>
+                        <header className='flex justify-between items-center p-2 px-3 bg-slate-200'>
+                            <h1 className='font-semibold text-lg'>Collaborators</h1>
+                            <button className='p-2 cursor-pointer' onClick={() => setisSidePanelOpen(!isSidePanelOpen)}><i className='ri-close-fill'></i></button>
+                        </header>
+                        <div className="users flex flex-col gap-2">
+                            {project.users && project.users.map(u => (
+                                <div className='user cursor-pointer hover:bg-slate-200 p-2 flex gap-2 items-center' key={u._id}>
+                                    <div className='aspect-square rounded-full w-fit h-fit flex items-center justify-center p-5 text-white bg-slate-600'><i className='ri-user-fill absolute'></i></div>
+                                    <h1 className='font-semibold text-lg'>{u.email}</h1>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </section>
+                <section className="right bg-slate-100 grow h-full flex">
+                    <div className="explorer h-full max-w-64 bg-slate-200 min-w-52 flex flex-col">
+                        <div className="p-2 bg-slate-300">
+                            <button
+                                onClick={() => {
+                                    const fileName = prompt("Enter new file name (e.g., newfile.js)");
+                                    if (!fileName) return;
+                                    if (fileTree[fileName]) { toast.info("File already exists!"); return; }
+                                    const updatedTree = { ...fileTree, [fileName]: { file: { contents: '' } } };
+                                    setFileTree(updatedTree);
+                                    setCurrentFile(fileName);
+                                    setOpenFiles([...new Set([...openFiles, fileName])]);
+                                }}
+                                className="w-full bg-green-600 hover:bg-green-700 text-white py-1 px-2 rounded"
+                            >
+                                + New File
+                            </button>
+                        </div>
+                        <div className="file-tree w-full overflow-y-auto">
+                            {Object.keys(fileTree).map((file, index) => (
+                                <button key={index} onClick={() => { setCurrentFile(file); setOpenFiles([...new Set([...openFiles, file])]); }} className="tree-element cursor-pointer p-2 px-4 flex items-center gap-2 bg-slate-200 w-full" >
+                                    <p className="font-semibold text-lg">{file}</p>
                                 </button>
                             ))}
                         </div>
-                        <div className="actions">
-                            <button onClick={() => setIsSaveModalOpen(true)} className='p-2 px-4 bg-green-600 text-white mr-2'>
-                                Save Project
-                            </button>
-
-                            {/* STOP BUTTON */}
-                            <button
-                                onClick={handleStopServer}
-                                className='p-2 px-4 bg-red-600 text-white mr-2'>
-                                Stop
-                            </button>
-
-                            <button
-                                onClick={async () => {
-                                    if (!webContainer) { console.error("WebContainer not ready."); return; }
-                                    await webContainer.mount(fileTree);
-                                    const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
-                                    const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
-                                    const buildArr = parseCommand(buildCommand);
-                                    if (buildArr) {
-                                        const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
-                                        buildProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[npm install]: ${chunk}`); } }));
-                                        const exitCode = await buildProc.exit;
-                                        if (exitCode !== 0) { console.error(`❌ Build process failed with exit code ${exitCode}.`); return; }
-                                    }
-                                    if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
-                                    const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
-                                    const startArr = parseCommand(startCommand);
-                                    if (startArr) {
-                                        const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
-                                        setServerProc(startProc);
-                                        startProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[server output]: ${chunk}`); } }));
-                                        webContainer.on('server-ready', (port, url) => setIframeUrl(url));
-                                        webContainer.on('error', (error) => console.error('❌ WebContainer error:', error));
-                                    }
-                                }}
-                                className='p-2 px-4 bg-blue-500 text-white'>
-                                Run
-                            </button>
-                        </div>
                     </div>
-                    <div className='bottom flex grow max-w-full shrink overflow-auto'>
-                        {fileTree[currentFile] && (
-                            <div className='code-editor-area h-full overflow-auto grow bg-slate-50'>
-                                <pre className='hljs h-full'>
-                                    <code
-                                        className='hljs h-full outline-none'
-                                        contentEditable={true}
-                                        suppressContentEditableWarning={true}
-                                        onBlur={(e) => {
-                                            const updatedContent = e.target.textContent;
-                                            const ft = { ...fileTree, [currentFile]: { file: { contents: updatedContent } } };
-                                            setFileTree(ft);
+                    <div className="editor-and-preview flex-1 flex flex-col h-full overflow-hidden">
+                        <div className="code-editor flex flex-col grow h-full">
+                            <div className='top flex justify-between items-center w-full bg-slate-200'>
+                                <div className="files flex">
+                                    {openFiles.map((file, index) => (
+                                        <button key={index} onClick={() => setCurrentFile(file)} className={`open-file cursor-pointer p-2 px-4 flex items-center w-fit gap-2 bg-slate-300 ${currentFile === file ? 'bg-slate-50' : ''}`} >
+                                            <p className='font-semibold text-lg'>{file}</p>
+                                            <i className="ri-delete-bin-fill text-red-500 hover:text-red-700 ml-2" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Are you sure you want to delete "${file}"?`)) { deleteFile(file); } }} />
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="actions p-2">
+                                    <button onClick={() => setIsSaveModalOpen(true)} className='p-2 px-4 bg-green-600 text-white rounded mr-2'>Save</button>
+                                    <button onClick={handleStopServer} className='p-2 px-4 bg-red-600 text-white rounded mr-2'>Stop</button>
+                                    <button
+                                        onClick={async () => {
+                                            if (!webContainer) { console.error("WebContainer not ready."); return; }
+                                            await webContainer.mount(fileTree);
+                                            const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
+                                            const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
+                                            const buildArr = parseCommand(buildCommand);
+                                            if (buildArr) {
+                                                const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
+                                                buildProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[npm install]: ${chunk}`); } }));
+                                                const exitCode = await buildProc.exit;
+                                                if (exitCode !== 0) { console.error(`❌ Build process failed with exit code ${exitCode}.`); return; }
+                                            }
+                                            if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
+                                            const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
+                                            const startArr = parseCommand(startCommand);
+                                            if (startArr) {
+                                                const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
+                                                setServerProc(startProc);
+                                                startProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[server output]: ${chunk}`); } }));
+                                                webContainer.on('server-ready', (port, url) => setIframeUrl(url));
+                                                webContainer.on('error', (error) => console.error('❌ WebContainer error:', error));
+                                            }
                                         }}
-                                        dangerouslySetInnerHTML={{ __html: hljs.highlight(fileTree[currentFile]?.file?.contents || '', { language: getLanguage(currentFile) }).value }}
-                                        style={{ whiteSpace: 'pre-wrap', paddingBottom: '25rem' }}
-                                    />
-                                </pre>
+                                        className='p-2 px-4 bg-blue-500 text-white rounded'>
+                                        Run
+                                    </button>
+                                </div>
+                            </div>
+                            <div className='bottom flex grow max-w-full shrink overflow-auto'>
+                                {fileTree[currentFile] ? (
+                                    <div className='code-editor-area h-full w-full overflow-auto grow bg-slate-50'>
+                                        <pre className='hljs h-full'>
+                                            <code
+                                                className='hljs h-full outline-none p-4'
+                                                contentEditable={true}
+                                                suppressContentEditableWarning={true}
+                                                onBlur={(e) => {
+                                                    const updatedContent = e.target.textContent;
+                                                    const ft = { ...fileTree, [currentFile]: { file: { contents: updatedContent } } };
+                                                    setFileTree(ft);
+                                                }}
+                                                dangerouslySetInnerHTML={{ __html: hljs.highlight(fileTree[currentFile]?.file?.contents || '', { language: getLanguage(currentFile) }).value }}
+                                                style={{ whiteSpace: 'pre-wrap', paddingBottom: '25rem' }}
+                                            />
+                                        </pre>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center justify-center w-full h-full bg-slate-50 text-gray-500">
+                                        <p>Select a file to start editing or create a new one</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        {iframeUrl && webContainer && (
+                            <div className="flex flex-col min-w-[50%] h-full border-l-2 border-gray-400">
+                                <div className="address-bar">
+                                    <input onChange={(e) => setIframeUrl(e.target.value)} type='text' value={iframeUrl} className='w-full p-2 px-4 bg-slate-200' />
+                                </div>
+                                <iframe src={iframeUrl} className='w-full h-full'></iframe>
                             </div>
                         )}
                     </div>
-                </div>
-                {iframeUrl && webContainer && (
-                    <div className="flex flex-col min-w-96 h-full">
-                        <div className="address-bar">
-                            <input onChange={(e) => setIframeUrl(e.target.value)} type='text' value={iframeUrl} className='w-full p-2 px-4 bg-slate-200' />
+                </section>
+                {isModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                        <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-4 sm:mx-0 p-6 flex flex-col gap-4">
+                            <header className="flex justify-between items-center mb-2">
+                                <h2 className="text-xl font-bold">Select a User</h2>
+                                <button className="text-gray-500 hover:text-gray-700" onClick={() => setIsModalOpen(false)}>
+                                    <i className="ri-close-line text-2xl"></i>
+                                </button>
+                            </header>
+                            <div className="users-list flex flex-col items-center gap-2 max-h-72 overflow-y-auto">
+                                {users.map(u => (
+                                    <button key={u._id} className={`user cursor-pointer flex items-center hover:bg-slate-100 ${Array.from(selectedUserId).includes(u._id) ? 'bg-slate-200 text-black' : ''} gap-3 p-3 rounded-lg transition-colors w-full text-left`} onClick={() => handleUserSelect(u._id)}>
+                                        <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center text-white">
+                                            <i className="ri-user-3-line text-lg"></i>
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold">{u.name}</div>
+                                            <div className="text-xs text-gray-500">{u.email}</div>
+                                        </div>
+                                    </button>
+                                ))}
+                                <button onClick={addcollaborators} className='bg-slate-950 text-white px-4 py-2 rounded-lg mt-4'>Add Selected</button>
+                            </div>
                         </div>
-                        <iframe src={iframeUrl} className='w-full h-full'></iframe>
                     </div>
                 )}
-            </section>
-            {isModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-4 sm:mx-0 p-6 flex flex-col gap-4">
-                        <header className="flex justify-between items-center mb-2">
-                            <h2 className="text-xl font-bold">Select a User</h2>
-                            <button className="text-gray-500 hover:text-gray-700" onClick={() => setIsModalOpen(false)}>
-                                <i className="ri-close-line text-2xl"></i>
-                            </button>
-                        </header>
-                        <div className="users-list flex flex-col items-center gap-2 max-h-72 overflow-y-auto">
-                            {users.map(u => (
-                                <button key={u._id} className={`user cursor-pointer flex items-center hover:bg-slate-100 ${Array.from(selectedUserId).includes(u._id) ? 'bg-slate-200 text-black' : ''} gap-3 p-3 rounded-lg transition-colors w-full text-left`} onClick={() => handleUserSelect(u._id)}>
-                                    <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center text-white">
-                                        <i className="ri-user-3-line text-lg"></i>
-                                    </div>
-                                    <div>
-                                        <div className="font-semibold">{u.name}</div>
-                                        <div className="text-xs text-gray-500">{u.email}</div>
-                                    </div>
-                                </button>
-                            ))}
-                            <button onClick={addcollaborators} className='bg-slate-950 text-white px-4 py-2 rounded-lg mt-4'>Add Selected</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {isSaveModalOpen && (
-                <div style={styles.modalBackdrop}>
-                    <div style={styles.modalContent}>
-                        <h2 style={styles.modalHeader}>Select Messages to Save</h2>
-                        <div style={styles.messagesList}>
-                            {messages.map((msg, index) => (
-                                <div key={msg._id || index} style={styles.messageItem}>
-                                    <input type="checkbox" id={`msg-${index}`} onChange={(e) => handleMessageSelection(msg, e.target.checked)} />
-                                    <label htmlFor={`msg-${index}`} style={styles.messageLabel}>
-                                        <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
-                                    </label>
-                                </div>
-                            ))}
-                        </div>
-                        <div style={styles.modalActions}>
-                            <button onClick={handleSaveProject} style={styles.buttonPrimary}>Save Selected</button>
-                            <button onClick={() => setIsSaveModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {isDeleteModalOpen && (
-                <div style={styles.modalBackdrop}>
-                    <div style={styles.modalContent}>
-                        <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
-                        <p style={{ color: '#6c757d', marginTop: '-10px', marginBottom: '15px' }}>Only messages saved to the database are shown here.</p>
-                        <div style={styles.messagesList}>
-                            {messages.filter(msg => msg._id).length > 0 ? (
-                                messages.filter(msg => msg._id).map((msg, index) => (
-                                    <div key={msg._id} style={styles.messageItem}>
-                                        <input type="checkbox" id={`del-msg-${index}`} onChange={(e) => handleMessageDeletionSelection(msg, e.target.checked)} />
-                                        <label htmlFor={`del-msg-${index}`} style={styles.messageLabel}>
+                {isSaveModalOpen && (
+                    <div style={styles.modalBackdrop}>
+                        <div style={styles.modalContent}>
+                            <h2 style={styles.modalHeader}>Select Messages to Save</h2>
+                            <div style={styles.messagesList}>
+                                {messages.map((msg, index) => (
+                                    <div key={msg._id || index} style={styles.messageItem}>
+                                        <input type="checkbox" id={`msg-${index}`} onChange={(e) => handleMessageSelection(msg, e.target.checked)} />
+                                        <label htmlFor={`msg-${index}`} style={styles.messageLabel}>
                                             <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
                                         </label>
                                     </div>
-                                ))
-                            ) : (
-                                <p>No messages have been saved to the database yet.</p>
-                            )}
-                        </div>
-                        <div style={styles.modalActions}>
-                            <button onClick={handleDeleteMessages} style={{ ...styles.buttonPrimary, backgroundColor: '#dc3545' }}>Delete Selected</button>
-                            <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                                ))}
+                            </div>
+                            <div style={styles.modalActions}>
+                                <button onClick={handleSaveProject} style={styles.buttonPrimary}>Save Selected</button>
+                                <button onClick={() => setIsSaveModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </main>
+                )}
+                {isDeleteModalOpen && (
+                    <div style={styles.modalBackdrop}>
+                        <div style={styles.modalContent}>
+                            <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
+                            <p style={{color: '#6c757d', marginTop: '-10px', marginBottom: '15px'}}>Only messages saved to the database are shown here.</p>
+                            <div style={styles.messagesList}>
+                                {messages.filter(msg => msg._id).length > 0 ? (
+                                    messages.filter(msg => msg._id).map((msg, index) => (
+                                        <div key={msg._id} style={styles.messageItem}>
+                                            <input type="checkbox" id={`del-msg-${index}`} onChange={(e) => handleMessageDeletionSelection(msg, e.target.checked)} />
+                                            <label htmlFor={`del-msg-${index}`} style={styles.messageLabel}>
+                                                <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
+                                            </label>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p>No messages have been saved to the database yet.</p>
+                                )}
+                            </div>
+                            <div style={styles.modalActions}>
+                                <button onClick={handleDeleteMessages} style={{...styles.buttonPrimary, backgroundColor: '#dc3545'}}>Delete Selected</button>
+                                <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </main>
+        </div>
     )
 }
 
-export default Project
+export default Project;

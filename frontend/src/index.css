@@ -20,3 +20,15 @@
     display: none; /* Chrome/Safari/Opera */
   }
 }
+
+.statusBar {
+  width: 100%;
+  background-color: #2d3748; /* A dark gray/blue color */
+  color: white;
+  padding: 4px 16px;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
