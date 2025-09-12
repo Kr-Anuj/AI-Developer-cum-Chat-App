@@ -96,7 +96,7 @@ const Project = () => {
     const messageBox = useRef();
     const isInitialMount = useRef(true);
     const typingTimeouts = useRef({});
-    const hasSentTyping = useRef(false);
+    // *** REMOVED hasSentTyping ref ***
 
 
     // Debounced auto-save function
@@ -120,11 +120,18 @@ const Project = () => {
     ).current;
 
     // --- Handlers ---
+
+    // *** NEW: Debounced function to emit TYPING event ***
+    const emitTyping = useRef(debounce(() => {
+        sendMessage('typing');
+    }, 300)).current; // Send a typing event every 300ms
+
+    // *** MODIFIED: Debounced function to emit STOP typing event ***
     const emitStopTyping = useRef(debounce(() => {
         sendMessage('stop typing');
-        hasSentTyping.current = false;
-    }, 2000)).current;
+    }, 2000)).current; // 2-second inactivity delay
 
+    // *** MODIFIED: send function ***
     const send = () => {
         if (!message.trim()) return;
         sendMessage('project-message', {
@@ -133,26 +140,27 @@ const Project = () => {
         });
         appendOutgoingMessage({ text: message });
         setMessage('');
+        // Immediately cancel any pending typing/stop-typing events
+        emitTyping.cancel();
         emitStopTyping.cancel();
         sendMessage('stop typing');
-        hasSentTyping.current = false;
     };
 
+    // *** MODIFIED: input handler with corrected logic ***
     const handleInputChange = (e) => {
         const value = e.target.value;
         setMessage(value);
 
-        if (value && !hasSentTyping.current) {
-            sendMessage('typing');
-            hasSentTyping.current = true;
-        }
-
-        emitStopTyping();
-
-        if (!value) {
+        if (value) {
+            // Continuously send typing events while user is typing
+            emitTyping();
+            // Reset the stop-typing timer on every keystroke
+            emitStopTyping();
+        } else {
+            // Immediately stop typing if input is cleared
+            emitTyping.cancel();
             emitStopTyping.cancel();
             sendMessage('stop typing');
-            hasSentTyping.current = false;
         }
     };
 
@@ -310,13 +318,18 @@ const Project = () => {
 
         const handleTyping = ({ email }) => {
             if (!email) return;
-            setTypingUsers(prev => ({ ...prev, [email]: true }));
+
+            // Clear any existing timeout for this user
             if (typingTimeouts.current[email]) {
                 clearTimeout(typingTimeouts.current[email]);
             }
+
+            setTypingUsers(prev => ({ ...prev, [email]: true }));
+
+            // Set a new timeout that will be reset if another event arrives
             typingTimeouts.current[email] = setTimeout(() => {
                 handleStopTyping({ email });
-            }, 3000);
+            }, 3000); // This is the inactivity fallback
         };
 
         const cleanupMsg = receiveMessage('project-message', handleNewMessage);
@@ -354,7 +367,6 @@ const Project = () => {
     const appendIncomingMessage = (msg) => { setMessages(prev => [...prev, msg]); };
     const appendOutgoingMessage = (msg) => { setMessages(prev => [...prev, { user, message: msg, timestamp: new Date() }]); };
 
-    // *** CORRECTED renderTypingMessage function ***
     const renderTypingMessage = () => {
         const typists = Object.keys(typingUsers);
         if (typists.length === 0) return null;
@@ -364,6 +376,9 @@ const Project = () => {
         }
         if (typists.length === 2) {
             return `${typists[0]} and ${typists[1]} are typing...`;
+        }
+        if (typists.length === 3) {
+            return `${typists[0]} and ${typists[1]} and ${typists[2]} are typing...`;
         }
         return 'Several people are typing...';
     };
@@ -432,8 +447,7 @@ const Project = () => {
                     <div className="typing-indicator-wrapper">
                         {Object.keys(typingUsers).length > 0 && (
                             <div className="typing-bubble">
-                                <span className="typing-bubble-name">{renderTypingMessage()}</span>
-                                {/* <div className="dot-flashing"></div> */}
+                                {renderTypingMessage()}
                             </div>
                         )}
                     </div>
@@ -609,7 +623,6 @@ const Project = () => {
                         </div>
                     </div>
                 )}
-                {/* *** CORRECTED isDeleteModalOpen modal *** */}
                 {isDeleteModalOpen && (
                     <div style={styles.modalBackdrop}>
                         <div style={styles.modalContent}>
