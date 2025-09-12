@@ -14,7 +14,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: process.env.CORS_ORIGIN, // Use the environment variable
+        origin: process.env.CORS_ORIGIN,
         methods: ["GET", "POST"]
     }
 });
@@ -47,7 +47,6 @@ io.on('connection', socket => {
     socket.join(socket.roomId); // Join the project room
     socket.on('project-message', async data => {
         const message = data.message;
-        // console.log('message', data);
         const messageText = message?.text || "";
         const aiIsPresentInMessage = messageText.includes('@ai') || messageText.includes('@AI') || messageText.includes('@Ai') || messageText.includes('@aI');
 
@@ -69,9 +68,22 @@ io.on('connection', socket => {
             })
             return;
         }
-    })
+    });
+
+    // Listen for 'typing' event and broadcast only the email
+    socket.on('typing', () => {
+        socket.broadcast.to(socket.roomId).emit('typing', { email: socket.user.email });
+    });
+
+    // Listen for 'stop typing' event and broadcast only the email
+    socket.on('stop typing', () => {
+        socket.broadcast.to(socket.roomId).emit('stop typing', { email: socket.user.email });
+    });
+
     socket.on('disconnect', () => {
         console.log('A user disconnected:', socket.id);
+        // Broadcast that the user has stopped typing on disconnect
+        socket.broadcast.to(socket.roomId).emit('stop typing', { email: socket.user.email });
         socket.leave(socket.roomId); // Leave the project room
     });
 });

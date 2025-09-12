@@ -9,6 +9,7 @@ import { getWebContainer } from '../config/webContainer.js'
 import { debounce } from 'lodash'
 import { toast } from 'react-toastify';
 
+// Helper functions (parseCommand, etc.) remain the same...
 function parseCommand(cmdObj) {
     if (!cmdObj) return null;
     let cmd = cmdObj.mainItem;
@@ -58,6 +59,7 @@ const getLanguage = (filename) => {
     return 'plaintext'
 }
 
+
 const Project = () => {
     const location = useLocation();
     const { user } = useContext(UserContext);
@@ -77,6 +79,8 @@ const Project = () => {
     const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [saveStatus, setSaveStatus] = useState('saved');
+    const [typingUsers, setTypingUsers] = useState({});
+
 
     // State for selections in modals
     const [selectedUserId, setSelectedUserId] = useState(new Set());
@@ -91,6 +95,9 @@ const Project = () => {
     // Refs
     const messageBox = useRef();
     const isInitialMount = useRef(true);
+    const typingTimeouts = useRef({});
+    const hasSentTyping = useRef(false);
+
 
     // Debounced auto-save function
     const autoSaveProject = useRef(
@@ -113,6 +120,41 @@ const Project = () => {
     ).current;
 
     // --- Handlers ---
+    const emitStopTyping = useRef(debounce(() => {
+        sendMessage('stop typing');
+        hasSentTyping.current = false;
+    }, 2000)).current;
+
+    const send = () => {
+        if (!message.trim()) return;
+        sendMessage('project-message', {
+            message: { text: message },
+            user
+        });
+        appendOutgoingMessage({ text: message });
+        setMessage('');
+        emitStopTyping.cancel();
+        sendMessage('stop typing');
+        hasSentTyping.current = false;
+    };
+
+    const handleInputChange = (e) => {
+        const value = e.target.value;
+        setMessage(value);
+
+        if (value && !hasSentTyping.current) {
+            sendMessage('typing');
+            hasSentTyping.current = true;
+        }
+
+        emitStopTyping();
+
+        if (!value) {
+            emitStopTyping.cancel();
+            sendMessage('stop typing');
+            hasSentTyping.current = false;
+        }
+    };
 
     const handleUserSelect = (id) => {
         setSelectedUserId(prev => {
@@ -131,16 +173,6 @@ const Project = () => {
         }).catch(err => {
             console.log(err)
         })
-    }
-
-    function send() {
-        if (!message.trim()) return;
-        sendMessage('project-message', {
-            message: { text: message },
-            user
-        });
-        appendOutgoingMessage({ text: message });
-        setMessage('');
     }
 
     const handleMessageSelection = (message, isChecked) => {
@@ -167,7 +199,7 @@ const Project = () => {
             setSaveStatus('dirty');
         }
     };
-    
+
     const handleMessageDeletionSelection = (message, isChecked) => {
         setMessagesToDelete(prev => {
             const newSet = new Set(prev);
@@ -233,7 +265,8 @@ const Project = () => {
             setCurrentFile(updatedOpenFiles[0] || null);
         }
     }
-    
+
+
     // --- Effects ---
 
     useEffect(() => {
@@ -250,6 +283,7 @@ const Project = () => {
     useEffect(() => {
         if (!user || !project._id) return;
         const socket = initializeSocket(project._id);
+
         const handleNewMessage = (data) => {
             if (data.user?.email === user.email && data.user?.id !== 'ai') return;
             let message;
@@ -261,10 +295,42 @@ const Project = () => {
                 setFileTree(prev => ({ ...prev, ...message.fileTree }));
             }
         };
-        const cleanup = receiveMessage('project-message', handleNewMessage);
-        return () => { if (typeof cleanup === 'function') cleanup(); socket.disconnect(); };
+
+        const handleStopTyping = ({ email }) => {
+            if (!email) return;
+            if (typingTimeouts.current[email]) {
+                clearTimeout(typingTimeouts.current[email]);
+            }
+            setTypingUsers(prev => {
+                const newTypingUsers = { ...prev };
+                delete newTypingUsers[email];
+                return newTypingUsers;
+            });
+        };
+
+        const handleTyping = ({ email }) => {
+            if (!email) return;
+            setTypingUsers(prev => ({ ...prev, [email]: true }));
+            if (typingTimeouts.current[email]) {
+                clearTimeout(typingTimeouts.current[email]);
+            }
+            typingTimeouts.current[email] = setTimeout(() => {
+                handleStopTyping({ email });
+            }, 3000);
+        };
+
+        const cleanupMsg = receiveMessage('project-message', handleNewMessage);
+        const cleanupTyping = receiveMessage('typing', handleTyping);
+        const cleanupStopTyping = receiveMessage('stop typing', handleStopTyping);
+
+        return () => {
+            cleanupMsg();
+            cleanupTyping();
+            cleanupStopTyping();
+            socket.disconnect();
+        };
     }, [user, project._id]);
-    
+
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
@@ -282,11 +348,25 @@ const Project = () => {
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
     }, [saveStatus]);
 
-    useEffect(() => { scrollToBottom(); }, [messages]);
+    useEffect(() => { scrollToBottom(); }, [messages, typingUsers]);
 
     const scrollToBottom = () => { if (messageBox.current) { messageBox.current.scrollTop = messageBox.current.scrollHeight; } };
     const appendIncomingMessage = (msg) => { setMessages(prev => [...prev, msg]); };
     const appendOutgoingMessage = (msg) => { setMessages(prev => [...prev, { user, message: msg, timestamp: new Date() }]); };
+
+    // *** CORRECTED renderTypingMessage function ***
+    const renderTypingMessage = () => {
+        const typists = Object.keys(typingUsers);
+        if (typists.length === 0) return null;
+
+        if (typists.length === 1) {
+            return `${typists[0]} is typing...`;
+        }
+        if (typists.length === 2) {
+            return `${typists[0]} and ${typists[1]} are typing...`;
+        }
+        return 'Several people are typing...';
+    };
 
     const styles = {
         modalBackdrop: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
@@ -313,6 +393,7 @@ const Project = () => {
         }
     };
 
+
     return (
         <div className='w-screen h-screen flex flex-col bg-gray-700'>
             <div className="statusBar">
@@ -335,23 +416,30 @@ const Project = () => {
                             </button>
                         </div>
                     </header>
-                    
-                    {/* CORRECTED: Message container that grows and scrolls */}
+
                     <div ref={messageBox} className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 bg-slate-300">
                         {messages.map((msg, idx) => (
                             <div key={msg._id || idx} className={`message flex flex-col p-2 w-fit rounded-md
                                 ${msg.user?.id === 'ai' ? 'max-w-96 bg-slate-950 text-white' : msg.user?._id === user?._id ? 'ml-auto max-w-52 bg-slate-50' : 'max-w-54 bg-slate-50'}`}>
                                 <small className='opacity-65 text-xs'>{msg.user?.email}</small>
-                                <div className='text-sm'>
+                                <div className='text-sm break-words'>
                                     {msg.user?.id === 'ai' ? writeAiMessage(msg.message) : msg.message.text}
                                 </div>
                             </div>
                         ))}
                     </div>
 
-                    {/* CORRECTED: Input field is now part of the main flex column */}
+                    <div className="typing-indicator-wrapper">
+                        {Object.keys(typingUsers).length > 0 && (
+                            <div className="typing-bubble">
+                                <span className="typing-bubble-name">{renderTypingMessage()}</span>
+                                {/* <div className="dot-flashing"></div> */}
+                            </div>
+                        )}
+                    </div>
+
                     <div className="input-field w-full flex bg-white shrink-0">
-                        <input value={message} onChange={(e) => setMessage(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
+                        <input value={message} onChange={handleInputChange} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
                         <button onClick={send} className='px-5 bg-slate-950 text-white'><i className="ri-send-plane-fill"></i></button>
                     </div>
 
@@ -521,11 +609,12 @@ const Project = () => {
                         </div>
                     </div>
                 )}
+                {/* *** CORRECTED isDeleteModalOpen modal *** */}
                 {isDeleteModalOpen && (
                     <div style={styles.modalBackdrop}>
                         <div style={styles.modalContent}>
                             <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
-                            <p style={{color: '#6c757d', marginTop: '-10px', marginBottom: '15px'}}>Only messages saved to the database are shown here.</p>
+                            <p style={{ color: '#6c757d', marginTop: '-10px', marginBottom: '15px' }}>Only messages saved to the database are shown here.</p>
                             <div style={styles.messagesList}>
                                 {messages.filter(msg => msg._id).length > 0 ? (
                                     messages.filter(msg => msg._id).map((msg, index) => (
@@ -541,7 +630,7 @@ const Project = () => {
                                 )}
                             </div>
                             <div style={styles.modalActions}>
-                                <button onClick={handleDeleteMessages} style={{...styles.buttonPrimary, backgroundColor: '#dc3545'}}>Delete Selected</button>
+                                <button onClick={handleDeleteMessages} style={{ ...styles.buttonPrimary, backgroundColor: '#dc3545' }}>Delete Selected</button>
                                 <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
                             </div>
                         </div>

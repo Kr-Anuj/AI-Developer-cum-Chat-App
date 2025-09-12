@@ -16,6 +16,8 @@ export const initializeSocket = (projectId) => {
 
 export const receiveMessage = (eventName, cb) => {
     socketInstance.on(eventName, cb);
+    // Return a cleanup function
+    return () => socketInstance.off(eventName, cb);
 }
 
 export const sendMessage = (eventName, data) => {
