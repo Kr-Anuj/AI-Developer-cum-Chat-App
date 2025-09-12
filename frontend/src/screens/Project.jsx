@@ -9,7 +9,6 @@ import { getWebContainer } from '../config/webContainer.js'
 import { debounce } from 'lodash'
 import { toast } from 'react-toastify';
 
-// Helper functions (parseCommand, etc.) remain the same...
 function parseCommand(cmdObj) {
     if (!cmdObj) return null;
     let cmd = cmdObj.mainItem;
@@ -72,6 +71,7 @@ const Project = () => {
     const [openFiles, setOpenFiles] = useState([]);
     const [message, setMessage] = useState('');
     const [users, setUsers] = useState([]);
+    const [activeUsers, setActiveUsers] = useState([]);
 
     // UI State
     const [isSidePanelOpen, setisSidePanelOpen] = useState(false);
@@ -96,7 +96,6 @@ const Project = () => {
     const messageBox = useRef();
     const isInitialMount = useRef(true);
     const typingTimeouts = useRef({});
-    // *** REMOVED hasSentTyping ref ***
 
 
     // Debounced auto-save function
@@ -116,22 +115,18 @@ const Project = () => {
                     console.error("Auto-save failed:", err);
                     setSaveStatus('dirty');
                 });
-        }, 2000)
+        }, 3000)
     ).current;
 
     // --- Handlers ---
-
-    // *** NEW: Debounced function to emit TYPING event ***
     const emitTyping = useRef(debounce(() => {
         sendMessage('typing');
-    }, 300)).current; // Send a typing event every 300ms
+    }, 300)).current;
 
-    // *** MODIFIED: Debounced function to emit STOP typing event ***
     const emitStopTyping = useRef(debounce(() => {
         sendMessage('stop typing');
-    }, 2000)).current; // 2-second inactivity delay
+    }, 2000)).current;
 
-    // *** MODIFIED: send function ***
     const send = () => {
         if (!message.trim()) return;
         sendMessage('project-message', {
@@ -140,24 +135,19 @@ const Project = () => {
         });
         appendOutgoingMessage({ text: message });
         setMessage('');
-        // Immediately cancel any pending typing/stop-typing events
         emitTyping.cancel();
         emitStopTyping.cancel();
         sendMessage('stop typing');
     };
 
-    // *** MODIFIED: input handler with corrected logic ***
     const handleInputChange = (e) => {
         const value = e.target.value;
         setMessage(value);
 
         if (value) {
-            // Continuously send typing events while user is typing
             emitTyping();
-            // Reset the stop-typing timer on every keystroke
             emitStopTyping();
         } else {
-            // Immediately stop typing if input is cleared
             emitTyping.cancel();
             emitStopTyping.cancel();
             sendMessage('stop typing');
@@ -319,27 +309,33 @@ const Project = () => {
         const handleTyping = ({ email }) => {
             if (!email) return;
 
-            // Clear any existing timeout for this user
             if (typingTimeouts.current[email]) {
                 clearTimeout(typingTimeouts.current[email]);
             }
 
             setTypingUsers(prev => ({ ...prev, [email]: true }));
 
-            // Set a new timeout that will be reset if another event arrives
             typingTimeouts.current[email] = setTimeout(() => {
                 handleStopTyping({ email });
-            }, 3000); // This is the inactivity fallback
+            }, 3000);
+        };
+
+        // Listening for the active users update event
+        const handleActiveUsersUpdate = (users) => {
+            console.log('Active users:', users); // For debugging
+            setActiveUsers(users);
         };
 
         const cleanupMsg = receiveMessage('project-message', handleNewMessage);
         const cleanupTyping = receiveMessage('typing', handleTyping);
         const cleanupStopTyping = receiveMessage('stop typing', handleStopTyping);
+        const cleanupActiveUsers = receiveMessage('update-active-users', handleActiveUsersUpdate);
 
         return () => {
             cleanupMsg();
             cleanupTyping();
             cleanupStopTyping();
+            cleanupActiveUsers();
             socket.disconnect();
         };
     }, [user, project._id]);
@@ -377,9 +373,6 @@ const Project = () => {
         if (typists.length === 2) {
             return `${typists[0]} and ${typists[1]} are typing...`;
         }
-        if (typists.length === 3) {
-            return `${typists[0]} and ${typists[1]} and ${typists[2]} are typing...`;
-        }
         return 'Several people are typing...';
     };
 
@@ -398,11 +391,11 @@ const Project = () => {
     const renderSaveStatus = () => {
         switch (saveStatus) {
             case 'saving':
-                return <span style={{ color: 'white' }}>Saving...</span>;
+                return <span style={{ color: 'white' }}>⏳ Saving...</span>;
             case 'saved':
                 return <span style={{ color: 'white' }}>✅ All changes saved</span>;
             case 'dirty':
-                return <span style={{ color: 'white' }}>Unsaved changes...</span>;
+                return <span style={{ color: 'white' }}>⚠️ Unsaved changes...</span>;
             default:
                 return null;
         }
@@ -462,11 +455,18 @@ const Project = () => {
                             <h1 className='font-semibold text-lg'>Collaborators</h1>
                             <button className='p-2 cursor-pointer' onClick={() => setisSidePanelOpen(!isSidePanelOpen)}><i className='ri-close-fill'></i></button>
                         </header>
-                        <div className="users flex flex-col gap-2">
+                        {/* Conditionally rendering the green dot */}
+                        <div className="users flex flex-col gap-2 p-2">
                             {project.users && project.users.map(u => (
-                                <div className='user cursor-pointer hover:bg-slate-200 p-2 flex gap-2 items-center' key={u._id}>
-                                    <div className='aspect-square rounded-full w-fit h-fit flex items-center justify-center p-5 text-white bg-slate-600'><i className='ri-user-fill absolute'></i></div>
-                                    <h1 className='font-semibold text-lg'>{u.email}</h1>
+                                <div className='user cursor-pointer hover:bg-slate-200 p-2 rounded-md flex justify-between items-center' key={u._id}>
+                                    <div className="flex gap-2 items-center">
+                                        <div className='aspect-square rounded-full w-fit h-fit flex items-center justify-center p-5 text-white bg-slate-600'><i className='ri-user-fill absolute'></i></div>
+                                        <h1 className='font-semibold text-lg'>{u.email}</h1>
+                                    </div>
+                                    {/* Checking if the user's email is in the activeUsers list */}
+                                    {activeUsers.includes(u.email) && (
+                                        <span className="w-3 h-3 bg-green-500 rounded-full" title="Online"></span>
+                                    )}
                                 </div>
                             ))}
                         </div>
