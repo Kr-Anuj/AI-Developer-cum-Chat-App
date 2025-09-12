@@ -5,12 +5,20 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify';
 
 const Home = () => {
-    const { user } = useContext(UserContext)
+    const { user, setUser } = useContext(UserContext)
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [projectName, setProjectName] = useState('')
     const [projects, setProjects] = useState([])
-    const [isLoading, setIsLoading] = useState(true); // For loading state
+    const [isLoading, setIsLoading] = useState(true);
     const navigate = useNavigate()
+
+    // Function to handle user logout
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        setUser(null);
+        navigate('/login');
+        toast.success("You have been logged out.");
+    };
 
     function createProject(e) {
         e.preventDefault()
@@ -18,7 +26,6 @@ const Home = () => {
             name: projectName,
         })
         .then((res) => {
-            // Add the new project to the list without needing a full refetch
             setProjects(prevProjects => [...prevProjects, res.data]);
             setIsModalOpen(false)
             setProjectName('');
@@ -77,7 +84,16 @@ const Home = () => {
     }
 
     return (
-        <main className='p-4'>
+        <main className='p-4 relative min-h-screen bg-gray-50'>
+            
+            {/* Logout button */}
+            <button
+                onClick={handleLogout}
+                className="absolute top-4 right-4 bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors"
+            >
+                Logout
+            </button>
+
             <div className="projects flex flex-wrap gap-3">
                 <button
                     onClick={() => setIsModalOpen(true)}
@@ -111,4 +127,4 @@ const Home = () => {
     )
 }
 
-export default Home
+export default Home;
