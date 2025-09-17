@@ -9,6 +9,10 @@ import { getWebContainer } from '../config/webContainer.js'
 import { debounce } from 'lodash'
 import { toast } from 'react-toastify';
 
+// Helper function to remove terminal color/formatting codes for clean display
+const stripAnsiCodes = (str) => str.replace(/[\u001b\u009b][[()#;?]*.{0,2}(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+
+
 function parseCommand(cmdObj) {
     if (!cmdObj) return null;
     let cmd = cmdObj.mainItem;
@@ -91,6 +95,9 @@ const Project = () => {
     const [webContainer, setWebContainer] = useState(null);
     const [iframeUrl, setIframeUrl] = useState(null);
     const [serverProc, setServerProc] = useState(null);
+    const [serverStatus, setServerStatus] = useState('');
+    const [isWebContainerReady, setIsWebContainerReady] = useState(false);
+
 
     // Refs
     const messageBox = useRef();
@@ -108,7 +115,6 @@ const Project = () => {
             };
             axios.patch(`/projects/${currentProject._id}/save`, payload)
                 .then(() => {
-                    console.log("✅ Project auto-saved.");
                     setSaveStatus('saved');
                 })
                 .catch(err => {
@@ -230,21 +236,159 @@ const Project = () => {
     };
 
     const handleStopServer = async () => {
+        if (!isWebContainerReady) {
+            toast.error("Please Wait! WebContainer is being initialised");
+            return;
+        }
         if (serverProc) {
-            console.log("Stopping server process...");
+            setServerStatus('⏳ Stopping the currently running server...');
             try {
                 await serverProc.kill();
                 setServerProc(null);
                 setIframeUrl(null);
-                toast.success("Server stopped successfully.");
+                setServerStatus('✅ Server Stopped Successfully');
+                setTimeout(() => {
+                    if (isWebContainerReady) {
+                        setServerStatus('✅ WebContainer initialised successfully');
+                    } else {
+                        setServerStatus('');
+                    }
+                }, 3000);
             } catch (e) {
                 console.warn("Failed to stop server:", e);
+                setServerStatus('❌ Failed to stop server');
                 toast.error("Failed to stop the server.");
             }
         } else {
             toast.info("No server is currently running.");
         }
     };
+
+    const handleRunServer = async () => {
+        if (!isWebContainerReady) {
+            toast.error("Please Wait! WebContainer is being initialised");
+            return;
+        }
+
+        if (!webContainer) {
+            console.error("WebContainer not ready.");
+            setServerStatus('⚠️ WebContainer not ready');
+            return;
+        }
+
+        try {
+            setServerStatus('⏳ Mounting files...');
+            await webContainer.mount(fileTree);
+
+            const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
+            let buildArr;
+
+            if (fileTree['package.json']?.file?.contents) {
+                try {
+                    const pkgJson = JSON.parse(fileTree['package.json'].file.contents);
+                    const dependencies = Object.keys(pkgJson.dependencies || {});
+                    const devDependencies = Object.keys(pkgJson.devDependencies || {});
+                    const allDeps = [...dependencies, ...devDependencies];
+
+                    if (allDeps.length > 0) {
+                        buildArr = ['pnpm', 'add', ...allDeps];
+                    } else {
+                        buildArr = null;
+                    }
+                } catch (e) {
+                    console.error("Failed to parse package.json, falling back to default install.", e);
+                    buildArr = parseCommand(aiMsg?.buildCommand || { mainItem: 'pnpm', commands: ['install'] });
+                }
+            } else {
+                buildArr = parseCommand(aiMsg?.buildCommand || null);
+            }
+
+            if (buildArr) {
+                let buildLogs = '';
+                setServerStatus('🛠️ Installing Dependencies...');
+                let buildProc;
+
+                try {
+                    // Attempting to use the primary command (pnpm)
+                    buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
+                } catch (err) {
+                    // If command not found (e.g., pnpm failed to download), fall back to npm
+                    if (err.message.includes('ENOENT')) {
+                        console.warn(`'${buildArr[0]}' command failed or not found. Falling back to npm.`);
+                        setServerStatus(`'${buildArr[0]}'❌ failed, falling back to npm...`);
+                        const fallbackCommand = ['npm', 'install', '--legacy-peer-deps'];
+                        buildProc = await webContainer.spawn(fallbackCommand[0], fallbackCommand.slice(1));
+                    } else {
+                        // For any other error, re-throw it to be caught by the outer catch block
+                        throw err;
+                    }
+                }
+
+                buildProc.output.pipeTo(new WritableStream({
+                    write(chunk) {
+                        buildLogs += chunk;
+                    }
+                }));
+
+                const exitCode = await buildProc.exit;
+
+                if (exitCode !== 0) {
+                    const cleanLogs = stripAnsiCodes(buildLogs);
+                    const packageJsonContent = fileTree['package.json']?.file?.contents || 'package.json not found.';
+                    
+                    setServerStatus(`❌ Build failed with exit code ${exitCode}`);
+                    console.error(`❌ Build process failed. Logs:\n${cleanLogs}`);
+
+                    toast.error(
+                        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                            <p className="font-bold">Build process failed with exit code {exitCode}.</p>
+                            
+                            <h4 className="font-semibold mt-4 mb-1">Installer Log:</h4>
+                            <pre className='bg-gray-800 text-white p-2 rounded-md text-xs whitespace-pre-wrap break-all'>
+                                {cleanLogs.slice(-1000)}
+                            </pre>
+
+                            <h4 className="font-semibold mt-4 mb-1">package.json:</h4>
+                            <pre className='bg-gray-800 text-white p-2 rounded-md text-xs whitespace-pre-wrap break-all'>
+                                {packageJsonContent}
+                            </pre>
+                        </div>,
+                        { autoClose: false, style: { width: '600px' } }
+                    );
+                    return;
+                }
+            }
+
+            if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
+
+            const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
+            const startArr = parseCommand(startCommand);
+
+            if (startArr) {
+                setServerStatus('⏳ Running Run Command...');
+                const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
+                setServerProc(startProc);
+
+                startProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[server output]: ${chunk}`); } }));
+
+                webContainer.on('server-ready', (port, url) => {
+                    setIframeUrl(url);
+                    setServerStatus('▶️ Server is Running');
+                });
+
+                webContainer.on('error', (error) => {
+                    console.error('❌ WebContainer error:', error);
+                    setServerStatus('❌ WebContainer Error');
+                });
+                setServerStatus('⏳ Starting Server...');
+            }
+        } catch (error) {
+            console.error("Error during server run:", error);
+            setServerStatus('❌ An error occurred');
+            toast.error(`An unexpected error occurred: ${error.message}`);
+        }
+    };
+
 
     function writeAiMessage(message) {
         const messageObject = typeof message === "string" ? JSON.parse(message) : message;
@@ -275,7 +419,18 @@ const Project = () => {
             if (loadedProject.messages && loadedProject.messages.length > 0) setMessages(loadedProject.messages);
         });
         axios.get('/users/all').then(res => setUsers(res.data.users));
-        getWebContainer().then(setWebContainer);
+
+        setServerStatus('🛠️ Initialising WebContainer...');
+        getWebContainer()
+            .then(instance => {
+                setWebContainer(instance);
+                setServerStatus('✅ WebContainer initialised successfully');
+                setIsWebContainerReady(true);
+            })
+            .catch(err => {
+                console.error(err);
+                setServerStatus('❌ Error initialising WebContainer');
+            });
     }, [project._id]);
 
     useEffect(() => {
@@ -322,7 +477,6 @@ const Project = () => {
 
         // Listening for the active users update event
         const handleActiveUsersUpdate = (users) => {
-            console.log('Active users:', users); // For debugging
             setActiveUsers(users);
         };
 
@@ -406,7 +560,10 @@ const Project = () => {
         <div className='w-screen h-screen flex flex-col bg-gray-700'>
             <div className="statusBar">
                 <span className="font-semibold">{project.name}</span>
-                {renderSaveStatus()}
+                <div className='flex items-center gap-4'>
+                    {serverStatus && <span className='text-white text-sm'>{serverStatus}</span>}
+                    {renderSaveStatus()}
+                </div>
             </div>
             <main className='h-full w-full flex overflow-hidden'>
                 <section className='left relative flex flex-col h-full min-w-96 bg-slate-300'>
@@ -511,32 +668,11 @@ const Project = () => {
                                 </div>
                                 <div className="actions p-2">
                                     <button onClick={() => setIsSaveModalOpen(true)} className='p-2 px-4 bg-green-600 text-white rounded mr-2'>Save</button>
-                                    <button onClick={handleStopServer} className='p-2 px-4 bg-red-600 text-white rounded mr-2'>Stop</button>
+                                    <button onClick={handleStopServer} disabled={!isWebContainerReady} className='p-2 px-4 bg-red-600 text-white rounded mr-2 disabled:bg-red-400 disabled:cursor-not-allowed'>Stop</button>
                                     <button
-                                        onClick={async () => {
-                                            if (!webContainer) { console.error("WebContainer not ready."); return; }
-                                            await webContainer.mount(fileTree);
-                                            const aiMsg = messages.slice().reverse().find(msg => msg.user?.id === 'ai' && (msg.message?.buildCommand || msg.message?.startCommand))?.message;
-                                            const buildCommand = aiMsg?.buildCommand || { mainItem: 'npm', commands: ['install'] };
-                                            const buildArr = parseCommand(buildCommand);
-                                            if (buildArr) {
-                                                const buildProc = await webContainer.spawn(buildArr[0], buildArr.slice(1));
-                                                buildProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[npm install]: ${chunk}`); } }));
-                                                const exitCode = await buildProc.exit;
-                                                if (exitCode !== 0) { console.error(`❌ Build process failed with exit code ${exitCode}.`); return; }
-                                            }
-                                            if (serverProc) { try { await serverProc.kill(); } catch (e) { console.warn("Failed to kill previous server:", e); } }
-                                            const startCommand = aiMsg?.startCommand || { mainItem: 'npm', commands: ['start'] };
-                                            const startArr = parseCommand(startCommand);
-                                            if (startArr) {
-                                                const startProc = await webContainer.spawn(startArr[0], startArr.slice(1));
-                                                setServerProc(startProc);
-                                                startProc.output.pipeTo(new WritableStream({ write(chunk) { console.log(`[server output]: ${chunk}`); } }));
-                                                webContainer.on('server-ready', (port, url) => setIframeUrl(url));
-                                                webContainer.on('error', (error) => console.error('❌ WebContainer error:', error));
-                                            }
-                                        }}
-                                        className='p-2 px-4 bg-blue-500 text-white rounded'>
+                                        onClick={handleRunServer}
+                                        disabled={!isWebContainerReady}
+                                        className='p-2 px-4 bg-blue-500 text-white rounded disabled:bg-blue-300 disabled:cursor-not-allowed'>
                                         Run
                                     </button>
                                 </div>
