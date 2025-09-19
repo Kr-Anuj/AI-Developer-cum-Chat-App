@@ -135,6 +135,31 @@ export const saveProjectState = async ({ projectId, fileTree, messages }) => {
     }
 };
 
+export const addMessageToProject = async ({ projectId, user, message }) => {
+    if (!projectId || !user || !message) {
+        throw new Error('Project ID, user, and message are required.');
+    }
+
+    const newMessage = {
+        user,
+        message,
+        timestamp: new Date(),
+    };
+
+    const updatedProject = await projectModel.findByIdAndUpdate(
+        projectId,
+        { $push: { messages: newMessage } },
+        { new: true, runValidators: true, select: { messages: { $slice: -1 } } }
+    ).lean();
+
+    if (!updatedProject || !updatedProject.messages || updatedProject.messages.length === 0) {
+        throw new Error('Failed to save message or find project.');
+    }
+
+    // The query returns the project with only the last message. We return that message object.
+    return updatedProject.messages[0];
+};
+
 export const deleteMessages = async ({ projectId, messageIds }) => {
     try {
         const project = await projectModel.findById(projectId);
@@ -149,7 +174,7 @@ export const deleteMessages = async ({ projectId, messageIds }) => {
 
         // Save the updated project document
         await project.save();
-        
+
         return project;
     } catch (error) {
         throw new Error(error.message);

@@ -139,7 +139,6 @@ const Project = () => {
             message: { text: message },
             user
         });
-        appendOutgoingMessage({ text: message });
         setMessage('');
         emitTyping.cancel();
         emitStopTyping.cancel();
@@ -225,7 +224,6 @@ const Project = () => {
         if (window.confirm("Are you sure you want to permanently delete the selected messages?")) {
             try {
                 await axios.patch(`/projects/${project._id}/messages/delete`, { messageIds });
-                setMessages(prev => prev.filter(msg => !messageIds.includes(msg._id)));
                 toast.success("Messages deleted successfully.");
                 setIsDeleteModalOpen(false);
             } catch (error) {
@@ -335,14 +333,14 @@ const Project = () => {
                 if (exitCode !== 0) {
                     const cleanLogs = stripAnsiCodes(buildLogs);
                     const packageJsonContent = fileTree['package.json']?.file?.contents || 'package.json not found.';
-                    
+
                     setServerStatus(`❌ Build failed with exit code ${exitCode}`);
                     console.error(`❌ Build process failed. Logs:\n${cleanLogs}`);
 
                     toast.error(
                         <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
                             <p className="font-bold">Build process failed with exit code {exitCode}.</p>
-                            
+
                             <h4 className="font-semibold mt-4 mb-1">Installer Log:</h4>
                             <pre className='bg-gray-800 text-white p-2 rounded-md text-xs whitespace-pre-wrap break-all'>
                                 {cleanLogs.slice(-1000)}
@@ -438,7 +436,6 @@ const Project = () => {
         const socket = initializeSocket(project._id);
 
         const handleNewMessage = (data) => {
-            if (data.user?.email === user.email && data.user?.id !== 'ai') return;
             let message;
             try {
                 message = typeof data.message === "string" ? JSON.parse(data.message) : data.message;
@@ -480,16 +477,24 @@ const Project = () => {
             setActiveUsers(users);
         };
 
+        const handleMessagesDeleted = ({ messageIds }) => {
+            if (messageIds && messageIds.length > 0) {
+                setMessages(prev => prev.filter(msg => !messageIds.includes(msg._id)));
+            }
+        };
+
         const cleanupMsg = receiveMessage('project-message', handleNewMessage);
         const cleanupTyping = receiveMessage('typing', handleTyping);
         const cleanupStopTyping = receiveMessage('stop typing', handleStopTyping);
         const cleanupActiveUsers = receiveMessage('update-active-users', handleActiveUsersUpdate);
+        const cleanupDelete = receiveMessage('messages-deleted', handleMessagesDeleted);
 
         return () => {
             cleanupMsg();
             cleanupTyping();
             cleanupStopTyping();
             cleanupActiveUsers();
+            cleanupDelete();
             socket.disconnect();
         };
     }, [user, project._id]);

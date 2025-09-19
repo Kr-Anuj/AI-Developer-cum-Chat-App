@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import projectModel from './models/project.model.js';
 import { generateResult } from './services/ai.service.js';
+import * as projectService from './services/project.service.js';
 
 const port = process.env.PORT || 3000;
 const server = http.createServer(app);
@@ -19,6 +20,7 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
+app.set('io', io);
 
 io.use(async (socket, next) => {
     try {
@@ -59,28 +61,48 @@ io.on('connection', socket => {
     io.to(socket.roomId).emit('update-active-users', activeUsers[socket.roomId]);
 
 
-    socket.on('project-message', async data => {
-        const message = data.message;
-        const messageText = message?.text || "";
-        const aiIsPresentInMessage = messageText.includes('@ai') || messageText.includes('@AI') || messageText.includes('@Ai') || messageText.includes('@aI');
+    socket.on('project-message', async (data) => {
+        try {
+            const { message, user } = data;
+            const projectId = socket.roomId;
 
-        socket.broadcast.to(socket.roomId).emit('project-message', {
-            user: socket.user,
-            message: data.message,
-            timestamp: new Date()
-        });
-        if (aiIsPresentInMessage) {
-            const prompt = messageText.replace(/@ai/gi, '').trim();
+            // Saving the new message to the database
+            const savedMessage = await projectService.addMessageToProject({
+                projectId,
+                user,
+                message
+            });
 
-            const result = await generateResult(prompt);
-            io.to(socket.roomId).emit('project-message', {
-                message: result,
-                user: {
-                    id: 'ai',
-                    email: 'AI Assistant'
-                }
-            })
-            return;
+            // Broadcasting the complete, saved message to everyone in the room
+            io.to(projectId).emit('project-message', savedMessage);
+
+            // Handling the AI interaction when required
+            const messageText = message?.text || "";
+            const aiIsPresentInMessage = /@ai/gi.test(messageText);
+
+            if (aiIsPresentInMessage) {
+                const prompt = messageText.replace(/@ai/gi, '').trim();
+                const result = await generateResult(prompt);
+
+                const aiMessagePayload = {
+                    message: result,
+                    user: { id: 'ai', email: 'AI Assistant' }
+                };
+
+                // Saving the AI's response to the database
+                const savedAiMessage = await projectService.addMessageToProject({
+                    projectId,
+                    user: aiMessagePayload.user,
+                    message: aiMessagePayload.message,
+                });
+
+                // Broadcasting the saved AI message
+                io.to(projectId).emit('project-message', savedAiMessage);
+            }
+        } catch (error) {
+            console.error('Error handling project message:', error);
+            // Optionally, emit an error back to the sender
+            socket.emit('message-error', { error: 'Failed to send message.' });
         }
     });
 
@@ -94,7 +116,7 @@ io.on('connection', socket => {
 
     socket.on('disconnect', () => {
         console.log('A user disconnected:', socket.id, 'from room:', socket.roomId);
-        
+
         // To handle user leaving the room
         if (activeUsers[socket.roomId]) {
             // Removing the user from the list
@@ -103,7 +125,7 @@ io.on('connection', socket => {
             );
             // Broadcasting the updated list to the remaining users
             io.to(socket.roomId).emit('update-active-users', activeUsers[socket.roomId]);
-            
+
             // Cleaning up empty room arrays
             if (activeUsers[socket.roomId].length === 0) {
                 delete activeUsers[socket.roomId];

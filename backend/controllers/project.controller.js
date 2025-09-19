@@ -62,7 +62,7 @@ export const getProjectById = async (req, res) => {
 };
 
 export const updateFileTree = async (req, res) => {
-    
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
@@ -109,8 +109,11 @@ export const deleteMessages = async (req, res) => {
         if (!messageIds || !Array.isArray(messageIds) || messageIds.length === 0) {
             return res.status(400).json({ message: 'Message IDs must be a non-empty array.' });
         }
-        
+
         await projectService.deleteMessages({ projectId, messageIds });
+
+        const io = req.app.get('io');
+        io.to(projectId).emit('messages-deleted', { messageIds });
 
         res.status(200).json({ message: 'Messages deleted successfully.' });
     } catch (error) {
