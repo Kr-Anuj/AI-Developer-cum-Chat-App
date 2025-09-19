@@ -440,7 +440,7 @@ const Project = () => {
             // We add it directly to our state without changing it.
             appendIncomingMessage(data);
 
-            // We can still check for a fileTree within the message content
+            // Check for a fileTree within the message content
             const messageContent = data.message || {};
             if (messageContent.fileTree && Object.keys(messageContent.fileTree).length > 0) {
                 setFileTree(prev => ({ ...prev, ...messageContent.fileTree }));
@@ -609,7 +609,7 @@ const Project = () => {
                     </div>
 
                     <div className="input-field w-full flex bg-white shrink-0">
-                        <input value={message} onChange={handleInputChange} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Write your message here' />
+                        <input value={message} onChange={handleInputChange} onKeyDown={(e) => e.key === 'Enter' && send()} className='px-4 p-2 border-none outline-none grow' type="text" placeholder='Add @ai in message to use AI Assistant' />
                         <button onClick={send} className='px-5 bg-slate-950 text-white'><i className="ri-send-plane-fill"></i></button>
                     </div>
 
