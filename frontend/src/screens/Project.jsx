@@ -436,13 +436,14 @@ const Project = () => {
         const socket = initializeSocket(project._id);
 
         const handleNewMessage = (data) => {
-            let message;
-            try {
-                message = typeof data.message === "string" ? JSON.parse(data.message) : data.message;
-            } catch (e) { message = { text: data.message }; }
-            appendIncomingMessage({ ...data, message });
-            if (message.fileTree && Object.keys(message.fileTree).length > 0) {
-                setFileTree(prev => ({ ...prev, ...message.fileTree }));
+            // The `data` object from the server is the complete and correct message.
+            // We add it directly to our state without changing it.
+            appendIncomingMessage(data);
+
+            // We can still check for a fileTree within the message content
+            const messageContent = data.message || {};
+            if (messageContent.fileTree && Object.keys(messageContent.fileTree).length > 0) {
+                setFileTree(prev => ({ ...prev, ...messageContent.fileTree }));
             }
         };
 

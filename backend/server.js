@@ -73,6 +73,8 @@ io.on('connection', socket => {
                 message
             });
 
+             console.log('BACKEND: Broadcasting message with _id:', savedMessage._id, 'to room:', projectId);
+
             // Broadcasting the complete, saved message to everyone in the room
             io.to(projectId).emit('project-message', savedMessage);
 
