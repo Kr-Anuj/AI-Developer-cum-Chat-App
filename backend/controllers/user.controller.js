@@ -29,7 +29,7 @@ export const sendRegistrationOtp = async (req, res) => {
         }
 
         const otp = generateOtp();
-        await redisClient.set(`otp:${email}`, otp, 'EX', 300);
+        await redisClient.set(`otp:${email}`, otp, 'EX', 300); // 5-minute expiry
         await sendOtpEmail(email, otp);
 
         res.status(200).json({ message: "OTP has been sent to your email." });
@@ -89,16 +89,27 @@ export const loginWithPassword = async (req, res) => {
             return res.status(401).json({ message: "Invalid email or password." });
         }
 
-        // BYPASS CHECK
-        if (email.endsWith('@test.com') || email.endsWith('@example.com')) {
-            return res.status(200).json({ message: "OTP step bypassed for test user." });
+        // Generate and store OTP for all users
+        const otp = generateOtp();
+        await redisClient.set(`otp:${email}`, otp, 'EX', 300); // 5-minute expiry
+
+        // BYPASS CHECK: Only send email if it's NOT a test user
+        const isTestUser = email.endsWith('@test.com') || email.endsWith('@example.com');
+        
+        if (!isTestUser) {
+            try {
+                await sendOtpEmail(email, otp);
+            } catch (error) {
+                // Handle email error
+                console.error("Error in loginWithPassword (sendOtpEmail):", error);
+                // This is where your ETIMEDOUT error is being caught
+                return res.status(500).json({ message: "Server error while sending OTP." });
+            }
         }
 
-        const otp = generateOtp();
-        await redisClient.set(`otp:${email}`, otp, 'EX', 300);
-        await sendOtpEmail(email, otp);
-
+        // Always send the same successful response
         res.status(200).json({ message: "Password verified. An OTP has been sent to your email." });
+
     } catch (error) {
         console.error("Error in loginWithPassword:", error);
         res.status(500).json({ message: "Server error." });
@@ -140,6 +151,8 @@ export const loginWithOtp = async (req, res) => {
     }
 };
 
+// --- OTHER CONTROLLERS ---
+
 export const profileController = async (req, res) => {
     res.status(200).json({ user: req.user });
 };
@@ -148,6 +161,7 @@ export const logoutController = async (req, res) => {
     try {
         const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
         if (token) {
+            // Store token in Redis as "blocked" for 24 hours
             redisClient.set(token, 'logout', 'EX', 60 * 60 * 24);
         }
         res.status(200).json({ message: 'Logged Out Successfully' });
