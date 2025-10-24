@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 export const sendOtpEmail = async (to, otp) => {
   try {
     await resend.emails.send({
-      from: `"AI Developer cum Chat App" <${process.env.EMAIL_USER}>`,
+      from: 'AI Developer cum Chat App <noreply@yourdomain.com>',
       to,
       subject: 'Your One-Time Password (OTP)',
       html: `
