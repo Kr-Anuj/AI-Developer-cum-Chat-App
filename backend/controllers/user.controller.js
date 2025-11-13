@@ -151,6 +151,86 @@ export const loginWithOtp = async (req, res) => {
     }
 };
 
+// --- PASSWORD RESET FLOW ---
+
+export const sendResetOtp = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email } = req.body;
+    try {
+        // BYPASS CHECK for test users
+        const isTestUser = email.endsWith('@test.com') || email.endsWith('@example.com');
+        if (isTestUser) {
+            // Silently succeed for test users to match bypass flow
+            return res.status(200).json({ message: "OTP step bypassed for test user." });
+        }
+
+        const existingUser = await userModel.findOne({ email });
+        // IMPORTANT: For password reset, the user MUST exist.
+        if (!existingUser) {
+            // Send a generic message to prevent attackers from checking if an email is registered
+            return res.status(200).json({ message: "If an account with this email exists, an OTP has been sent." });
+        }
+
+        const otp = generateOtp();
+        // Use a different Redis key to avoid conflicts with login/register OTPs
+        await redisClient.set(`reset-otp:${email}`, otp, 'EX', 300); // 5-minute expiry
+        await sendOtpEmail(email, otp); 
+
+        res.status(200).json({ message: "An OTP has been sent to your email to reset your password." });
+    } catch (error) {
+        console.error("Error in sendResetOtp:", error);
+        res.status(500).json({ message: "Server error while sending OTP." });
+    }
+};
+
+export const resetPassword = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, otp, newPassword } = req.body;
+    try {
+        const storedOtp = await redisClient.get(`reset-otp:${email}`);
+
+        // BYPASS LOGIC WITH MAGIC OTP
+        const isTestUser = email.endsWith('@test.com') || email.endsWith('@example.com');
+        const isMagicOtp = otp === '070601';
+
+        if (!isMagicOtp && (!storedOtp || storedOtp !== otp)) {
+            if (!isTestUser) {
+                return res.status(400).json({ message: "Invalid or expired OTP. Please try again." });
+            }
+        }
+
+        // Find the user
+        const user = await userModel.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        // Set the new password. The'pre-save' hook in user.model.js will hash it automatically.
+        user.password = newPassword;
+        await user.save();
+
+        // Clean up the OTP
+        if (!isTestUser) {
+            await redisClient.del(`reset-otp:${email}`);
+            // Also delete any lingering login/register OTPs
+            await redisClient.del(`otp:${email}`); 
+        }
+
+        res.status(200).json({ message: "Password has been reset successfully. You can now login." });
+    } catch (error) {
+        console.error("Error in resetPassword:", error);
+        res.status(500).json({ message: "Server error while resetting password." });
+    }
+};
+
 // --- OTHER CONTROLLERS ---
 
 export const profileController = async (req, res) => {

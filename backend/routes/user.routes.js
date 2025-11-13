@@ -7,9 +7,9 @@ import { verifyCaptcha } from '../middleware/captcha.middleware.js';
 const router = Router();
 
 // --- REGISTRATION FLOW ---
-// Step 1: User provides email and solves CAPTCHA, we send OTP.
+// Step 1: User provides email and solves CAPTCHA and then we send OTP.
 router.post('/send-register-otp',
-    verifyCaptcha, // ✅ CAPTCHA verification added here
+    verifyCaptcha,
     body('email').isEmail().withMessage('A valid email is required'),
     userController.sendRegistrationOtp
 );
@@ -24,9 +24,9 @@ router.post('/register',
 
 
 // --- LOGIN FLOW ---
-// Step 1: User provides credentials + CAPTCHA. If correct, we send an OTP.
+// Step 1: User provides credentials + CAPTCHA. If correct then we send an OTP.
 router.post('/login-password',
-    verifyCaptcha, // ✅ CAPTCHA verification added here
+    verifyCaptcha,
     body('email').isEmail().withMessage('Email must be a valid email address'),
     body('password').notEmpty().withMessage('Password is required'),
     userController.loginWithPassword
@@ -37,6 +37,22 @@ router.post('/login-otp',
     body('email').isEmail().withMessage('Email is required'),
     body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
     userController.loginWithOtp
+);
+
+// --- PASSWORD RESET FLOW ---
+// Step 1: User provides email + CAPTCHA to request a reset OTP
+router.post('/send-reset-otp',
+    verifyCaptcha,
+    body('email').isEmail().withMessage('A valid email is required'),
+    userController.sendResetOtp
+);
+
+// Step 2: User provides email, OTP, and new password to reset
+router.post('/reset-password',
+    body('email').isEmail().withMessage('Email is required'),
+    body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters long'),
+    userController.resetPassword
 );
 
 router.get('/profile', authMiddleware.authUser, userController.profileController);
