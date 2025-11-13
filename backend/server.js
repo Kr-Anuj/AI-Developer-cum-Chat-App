@@ -12,7 +12,7 @@ const port = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 // Creating a variable to track active users
-const activeUsers = {}; // Example: { 'roomId': ['user1@email.com', 'user2@email.com'] }
+const activeUsers = {};
 
 const io = new Server(server, {
     cors: {
@@ -73,7 +73,7 @@ io.on('connection', socket => {
                 message
             });
 
-             console.log('BACKEND: Broadcasting message with _id:', savedMessage._id, 'to room:', projectId);
+            console.log('BACKEND: Broadcasting message with _id:', savedMessage._id, 'to room:', projectId);
 
             // Broadcasting the complete, saved message to everyone in the room
             io.to(projectId).emit('project-message', savedMessage);
@@ -83,27 +83,57 @@ io.on('connection', socket => {
             const aiIsPresentInMessage = /@ai/gi.test(messageText);
 
             if (aiIsPresentInMessage) {
-                const prompt = messageText.replace(/@ai/gi, '').trim();
-                const result = await generateResult(prompt);
+                try {
+                    const prompt = messageText.replace(/@ai/gi, '').trim();
+                    
+                    const result = await generateResult(prompt);
 
-                const aiMessagePayload = {
-                    message: result,
-                    user: { id: 'ai', email: 'AI Assistant' }
-                };
+                    const aiMessagePayload = {
+                        message: result,
+                        user: { id: 'ai', email: 'AI Assistant' }
+                    };
 
-                // Saving the AI's response to the database
-                const savedAiMessage = await projectService.addMessageToProject({
-                    projectId,
-                    user: aiMessagePayload.user,
-                    message: aiMessagePayload.message,
-                });
+                    // Saving the AI's response to the database
+                    const savedAiMessage = await projectService.addMessageToProject({
+                        projectId,
+                        user: aiMessagePayload.user,
+                        message: aiMessagePayload.message,
+                    });
 
-                // Broadcasting the saved AI message
-                io.to(projectId).emit('project-message', savedAiMessage);
+                    // Broadcasting the saved AI message
+                    io.to(projectId).emit('project-message', savedAiMessage);
+                
+                } catch (aiError) {
+                    console.error('Error during AI generation:', aiError.message);
+
+                    // 1. Create a user-friendly error message
+                    let userErrorMessage = "Sorry, I ran into an unexpected error.";
+                    if (aiError.message?.includes("503") || aiError.message?.includes("overloaded")) {
+                        userErrorMessage = "I'm experiencing high load right now. Please try your request again in a moment.";
+                    } else if (aiError.message?.includes("invalid JSON")) {
+                        userErrorMessage = "Sorry, I received an invalid response from the AI. Please try rephrasing.";
+                    }
+
+                    // 2. Save and broadcast the error as a chat message
+                    try {
+                        const aiErrorMessage = await projectService.addMessageToProject({
+                            projectId,
+                            user: { id: 'ai', email: 'AI Assistant' },
+                            message: { text: userErrorMessage }
+                        });
+                        
+                        // Broadcast the error message to the room
+                        io.to(projectId).emit('project-message', aiErrorMessage);
+
+                    } catch (dbError) {
+                        // If saving the error message *also* fails, just log it.
+                        console.error("CRITICAL: Failed to save AI error message to DB:", dbError);
+                    }
+                }
             }
         } catch (error) {
             console.error('Error handling project message:', error);
-            // Optionally, emit an error back to the sender
+            // This outer catch only handles errors from saving the *user's* message
             socket.emit('message-error', { error: 'Failed to send message.' });
         }
     });

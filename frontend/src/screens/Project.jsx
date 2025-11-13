@@ -228,7 +228,11 @@ const Project = () => {
                 setIsDeleteModalOpen(false);
             } catch (error) {
                 console.error("Failed to delete messages:", error);
-                toast.error("Error deleting messages.");
+                // --- MODIFIED ERROR MESSAGE ---
+                // Give specific feedback from the server if it exists
+                const errorMsg = error.response?.data?.message || "Error deleting messages.";
+                toast.error(errorMsg);
+                // --- END MODIFICATION ---
             }
         }
     };
@@ -765,32 +769,58 @@ const Project = () => {
                         </div>
                     </div>
                 )}
-                {isDeleteModalOpen && (
-                    <div style={styles.modalBackdrop}>
-                        <div style={styles.modalContent}>
-                            <h2 style={styles.modalHeader}>Select Saved Messages to Delete</h2>
-                            <p style={{ color: '#6c757d', marginTop: '-10px', marginBottom: '15px' }}>Only messages saved to the database are shown here.</p>
-                            <div style={styles.messagesList}>
-                                {messages.filter(msg => msg._id).length > 0 ? (
-                                    messages.filter(msg => msg._id).map((msg, index) => (
-                                        <div key={msg._id} style={styles.messageItem}>
-                                            <input type="checkbox" id={`del-msg-${index}`} onChange={(e) => handleMessageDeletionSelection(msg, e.target.checked)} />
-                                            <label htmlFor={`del-msg-${index}`} style={styles.messageLabel}>
-                                                <strong>{msg.user?.email}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
-                                            </label>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <p>No messages have been saved to the database yet.</p>
-                                )}
-                            </div>
-                            <div style={styles.modalActions}>
-                                <button onClick={handleDeleteMessages} style={{ ...styles.buttonPrimary, backgroundColor: '#dc3545' }}>Delete Selected</button>
-                                <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                {isDeleteModalOpen && (() => {
+                    // --- NEW LOGIC ---
+                    // 1. Get the logged-in user's ID.
+                    const loggedInUserId = user?._id;
+
+                    // 2. Filter the messages to find only those the user can delete.
+                    const deletableMessages = messages.filter(msg => {
+                        // Rule 1: Must be a saved message (have an _id)
+                        if (!msg._id) {
+                            return false;
+                        }
+                        
+                        // Rule 2: Must be deletable
+                        const isAIMessage = !msg.user?._id; // AI message if no user._id
+                        const isMyMessage = msg.user?._id === loggedInUserId;
+                        
+                        return isAIMessage || isMyMessage;
+                    });
+                    // --- END NEW LOGIC ---
+
+                    return (
+                        <div style={styles.modalBackdrop}>
+                            <div style={styles.modalContent}>
+                                <h2 style={styles.modalHeader}>Select Messages to Delete</h2>
+                                <p style={{ color: '#6c757d', marginTop: '-10px', marginBottom: '15px' }}>Only messages you are allowed to delete are shown here.</p>
+                                <div style={styles.messagesList}>
+                                    {/* --- MODIFIED --- */}
+                                    {/* Use the new `deletableMessages` array */}
+                                    {deletableMessages.length > 0 ? (
+                                        deletableMessages.map((msg, index) => (
+                                            <div key={msg._id} style={styles.messageItem}>
+                                                <input type="checkbox" id={`del-msg-${index}`} onChange={(e) => handleMessageDeletionSelection(msg, e.target.checked)} />
+                                                <label htmlFor={`del-msg-${index}`} style={styles.messageLabel}>
+                                                    {/* Updated to show "AI Assistant" for AI messages */}
+                                                    <strong>{msg.user?.email || 'AI Assistant'}:</strong> {msg.message?.text || JSON.stringify(msg.message)}
+                                                </label>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        // Updated the "no messages" text
+                                        <p>You do not have any messages that you can delete.</p>
+                                    )}
+                                    {/* --- END MODIFICATION --- */}
+                                </div>
+                                <div style={styles.modalActions}>
+                                    <button onClick={handleDeleteMessages} style={{ ...styles.buttonPrimary, backgroundColor: '#dc3545' }}>Delete Selected</button>
+                                    <button onClick={() => setIsDeleteModalOpen(false)} style={styles.buttonSecondary}>Cancel</button>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
             </main>
         </div>
     )

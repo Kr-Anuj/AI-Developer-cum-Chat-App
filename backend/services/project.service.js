@@ -160,23 +160,58 @@ export const addMessageToProject = async ({ projectId, user, message }) => {
     return updatedProject.messages[0];
 };
 
-export const deleteMessages = async ({ projectId, messageIds }) => {
+// --- DELETE MESSAGES ---
+// This function checks permissions before deletion
+export const deleteMessages = async ({ projectId, messageIds, userId }) => {
     try {
+        // 1. Find the project
         const project = await projectModel.findById(projectId);
         if (!project) {
             throw new Error('Project not found.');
         }
 
-        // Filter the messages array, keeping only the ones whose IDs are NOT in the messageIds array
-        project.messages = project.messages.filter(
-            (message) => !messageIds.includes(message._id.toString())
+        // Convert the user's ID to a string one time
+        const userIdString = userId.toString();
+
+        // 2. Check permissions for *every* message
+        for (const msgId of messageIds) {
+            const message = project.messages.id(msgId);
+
+            // If message was already deleted, skip it
+            if (!message) {
+                continue;
+            }
+
+            // --- THE PERMISSION LOGIC ---
+            
+            // Check if message.user and message.user._id exist
+            if (message.user && message.user._id) {
+                if (message.user._id.toString() === userIdString) {
+                    // It's the user's own message. Allow deletion.
+                    continue;
+                } else {
+                    // It's *another user's* message. FORBIDDEN.
+                    throw new Error('FORBIDDEN');
+                }
+            } else {
+                // --- This is an AI Message ---
+                // Allow anyone to delete AI messages.
+                // So, just 'continue' and allow it.
+                continue;
+            }
+        }
+
+        // 3. If the loop completes, all deletions are allowed.
+        await projectModel.updateOne(
+            { _id: projectId },
+            {
+                $pull: {
+                    messages: { _id: { $in: messageIds } }
+                }
+            }
         );
 
-        // Save the updated project document
-        await project.save();
-
-        return project;
     } catch (error) {
-        throw new Error(error.message);
+        throw error;
     }
 };

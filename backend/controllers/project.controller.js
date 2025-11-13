@@ -106,11 +106,19 @@ export const deleteMessages = async (req, res) => {
         const { projectId } = req.params;
         const { messageIds } = req.body;
 
+        // Getting the full user object of the person making the request
+        const loggedInUser = await userModel.findOne({ email: req.user.email });
+        if (!loggedInUser) {
+            return res.status(401).json({ message: 'User not found.' });
+        }
+        const userId = loggedInUser._id;
+
         if (!messageIds || !Array.isArray(messageIds) || messageIds.length === 0) {
             return res.status(400).json({ message: 'Message IDs must be a non-empty array.' });
         }
 
-        await projectService.deleteMessages({ projectId, messageIds });
+        // Passing the userId to the service so it can check permissions
+        await projectService.deleteMessages({ projectId, messageIds, userId });
 
         const io = req.app.get('io');
         io.to(projectId).emit('messages-deleted', { messageIds });
@@ -118,6 +126,12 @@ export const deleteMessages = async (req, res) => {
         res.status(200).json({ message: 'Messages deleted successfully.' });
     } catch (error) {
         console.error("Error deleting messages:", error);
+
+        // Catching the specific error to throw from the service
+        if (error.message === 'FORBIDDEN') {
+            return res.status(403).json({ message: 'You can only delete your own messages.' });
+        }
+
         res.status(500).json({ message: 'Server error while deleting messages.' });
     }
 };
